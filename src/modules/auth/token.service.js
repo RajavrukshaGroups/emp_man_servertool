@@ -20,6 +20,8 @@ const JWT_REFRESH_SECRET = getRequiredEnvironmentVariable("JWT_REFRESH_SECRET");
 const JWT_ACCESS_EXPIRES_IN = process.env.JWT_ACCESS_EXPIRES_IN ?? "15m";
 
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN ?? "7d";
+const JWT_SESSION_REFRESH_EXPIRES_IN =
+  process.env.JWT_SESSION_REFRESH_EXPIRES_IN ?? "1d";
 
 /**
  * Create the short-lived access token.
@@ -62,7 +64,7 @@ export const generateRefreshToken = ({
 }) => {
   const expiresIn = rememberMe
     ? JWT_REFRESH_EXPIRES_IN
-    : JWT_REFRESH_EXPIRES_IN;
+    : JWT_SESSION_REFRESH_EXPIRES_IN;
 
   return jwt.sign(
     {
