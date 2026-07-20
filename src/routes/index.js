@@ -12,6 +12,7 @@ import authRoutes from "../modules/auth/auth.routes.js";
 import departmentRoutes from "../modules/departments/department.routes.js";
 import teamRoutes from "../modules/teams/team.routes.js";
 import employeeRoutes from "../modules/employees/employee.routes.js";
+import dashboardRoutes from "../modules/dashboard/dashboard.routes.js";
 
 import { ApiResponse } from "../utils/ApiResponse.js";
 
@@ -30,11 +31,7 @@ router.get("/health", (req, res) => {
   return res
     .status(200)
     .json(
-      new ApiResponse(
-        200,
-        healthData,
-        "Employee Management API is running.",
-      ),
+      new ApiResponse(200, healthData, "Employee Management API is running."),
     );
 });
 
@@ -49,5 +46,6 @@ router.use("/companies/:companyId/departments", departmentRoutes);
 router.use("/companies/:companyId/teams", teamRoutes);
 router.use("/companies/:companyId/employees", employeeRoutes);
 router.use("/users/:userId/company-access", userCompanyAccessRouter);
+router.use("/companies/:companyId/dashboard", dashboardRoutes);
 
 export default router;

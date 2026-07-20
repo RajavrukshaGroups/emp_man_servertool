@@ -16,6 +16,8 @@ export const PERMISSION_MODULES = Object.freeze({
 });
 
 export const PERMISSIONS = Object.freeze({
+  DASHBOARD_READ: "dashboard.read",
+  
   COMPANY_CREATE: "company.create",
   COMPANY_READ: "company.read",
   COMPANY_UPDATE: "company.update",
