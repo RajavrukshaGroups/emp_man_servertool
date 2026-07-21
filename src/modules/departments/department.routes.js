@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { authenticate } from "../../middlewares/authenticate.middleware.js";
+import { requireCompanyScope } from "../../middlewares/companyScope.middleware.js";
 import { authorize } from "../../middlewares/authorize.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
 import { PERMISSIONS } from "../../constants/permissions.constants.js";
@@ -31,6 +32,7 @@ const router = Router({
  * Every department API requires authentication.
  */
 router.use(authenticate);
+router.use(requireCompanyScope);
 
 /**
  * Create department.
