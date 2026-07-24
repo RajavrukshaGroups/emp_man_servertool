@@ -1,5 +1,7 @@
 import { Router } from "express";
 
+import { authenticate } from "../../middlewares/authenticate.middleware.js";
+import { authorize } from "../../middlewares/authorize.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
 
 import {
@@ -25,32 +27,86 @@ import {
 
 const router = Router();
 
-router.post("/", validate(createUserSchema), createUser);
+/**
+ * Every users route requires authentication.
+ */
+router.use(authenticate);
 
-router.get("/", validate(listUsersSchema), listUsers);
+/**
+ * Create user.
+ */
+router.post(
+  "/",
+  authorize("admin.create"),
+  validate(createUserSchema),
+  createUser,
+);
 
-router.get("/:userId", validate(userIdParamSchema), getUserById);
+/**
+ * List users.
+ */
+router.get("/", authorize("admin.read"), validate(listUsersSchema), listUsers);
 
-router.patch("/:userId", validate(updateUserSchema), updateUser);
+/**
+ * Get one user.
+ */
+router.get(
+  "/:userId",
+  authorize("admin.read"),
+  validate(userIdParamSchema),
+  getUserById,
+);
 
+/**
+ * Update user.
+ */
+router.patch(
+  "/:userId",
+  authorize("admin.update"),
+  validate(updateUserSchema),
+  updateUser,
+);
+
+/**
+ * Change user status.
+ */
 router.patch(
   "/:userId/status",
+  authorize("admin.deactivate"),
   validate(updateUserStatusSchema),
   updateUserStatus,
 );
 
+/**
+ * Change own password.
+ *
+ * Do not use admin permission here if normal users should
+ * be allowed to change their own password.
+ */
 router.patch(
   "/:userId/change-password",
   validate(changePasswordSchema),
   changePassword,
 );
 
+/**
+ * Administrative password reset.
+ */
 router.patch(
   "/:userId/reset-password",
+  authorize("admin.update"),
   validate(resetPasswordSchema),
   resetPassword,
 );
 
-router.delete("/:userId", validate(userIdParamSchema), deleteUser);
+/**
+ * Soft-delete user.
+ */
+router.delete(
+  "/:userId",
+  authorize("admin.deactivate"),
+  validate(userIdParamSchema),
+  deleteUser,
+);
 
 export default router;

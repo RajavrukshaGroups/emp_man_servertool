@@ -1,4 +1,5 @@
 import { ApiResponse } from "../../utils/ApiResponse.js";
+import { ApiError } from "../../utils/ApiError.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 
 import {
@@ -12,14 +13,19 @@ import {
   updateUserStatus as updateUserStatusService,
 } from "./user.service.js";
 
+const getRequestContext = (req) => ({
+  actorId: req.user?.userId ?? null,
+  companyId: req.user?.companyId ?? null,
+  roleScopeType: req.user?.roleScopeType ?? null,
+});
+
 /**
  * Create user.
  */
 export const createUser = asyncHandler(async (req, res) => {
-  const user = await createUserService(
-    req.validated.body,
-    req.user?._id ?? null,
-  );
+  const context = getRequestContext(req);
+
+  const user = await createUserService(req.validated.body, context.actorId);
 
   return res
     .status(201)
@@ -30,20 +36,24 @@ export const createUser = asyncHandler(async (req, res) => {
  * List users.
  */
 export const listUsers = asyncHandler(async (req, res) => {
-  const result = await listUsersService(req.validated.query);
+  const context = getRequestContext(req);
+
+  console.log("Controller Context");
+  console.dir(context, { depth: null });
+
+  const result = await listUsersService(req.validated.query, context);
 
   return res
     .status(200)
     .json(new ApiResponse(200, result, "Users retrieved successfully."));
 });
 
-/**
- * Get user by ID.
- */
 export const getUserById = asyncHandler(async (req, res) => {
   const { userId } = req.validated.params;
 
-  const user = await getUserByIdService(userId);
+  const context = getRequestContext(req);
+
+  const user = await getUserByIdService(userId, context);
 
   return res
     .status(200)
@@ -56,11 +66,9 @@ export const getUserById = asyncHandler(async (req, res) => {
 export const updateUser = asyncHandler(async (req, res) => {
   const { userId } = req.validated.params;
 
-  const user = await updateUserService(
-    userId,
-    req.validated.body,
-    req.user?._id ?? null,
-  );
+  const context = getRequestContext(req);
+
+  const user = await updateUserService(userId, req.validated.body, context);
 
   return res
     .status(200)
@@ -74,11 +82,9 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
   const { userId } = req.validated.params;
   const { status } = req.validated.body;
 
-  const user = await updateUserStatusService(
-    userId,
-    status,
-    req.user?._id ?? null,
-  );
+  const context = getRequestContext(req);
+
+  const user = await updateUserStatusService(userId, status, context);
 
   let message = "User status updated successfully.";
 
@@ -98,17 +104,23 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
 });
 
 /**
- * Change user password.
+ * Change authenticated user's password.
  */
 export const changePassword = asyncHandler(async (req, res) => {
   const { userId } = req.validated.params;
   const { currentPassword, newPassword } = req.validated.body;
 
+  const context = getRequestContext(req);
+
+  if (String(userId) !== String(context.actorId)) {
+    throw new ApiError(403, "You can only change your own password.");
+  }
+
   await changePasswordService(
     userId,
     currentPassword,
     newPassword,
-    req.user?._id ?? null,
+    context.actorId,
   );
 
   return res
@@ -123,7 +135,9 @@ export const resetPassword = asyncHandler(async (req, res) => {
   const { userId } = req.validated.params;
   const { newPassword } = req.validated.body;
 
-  await resetPasswordService(userId, newPassword, req.user?._id ?? null);
+  const context = getRequestContext(req);
+
+  await resetPasswordService(userId, newPassword, context);
 
   return res
     .status(200)
@@ -136,7 +150,9 @@ export const resetPassword = asyncHandler(async (req, res) => {
 export const deleteUser = asyncHandler(async (req, res) => {
   const { userId } = req.validated.params;
 
-  await softDeleteUserService(userId, req.user?._id ?? null);
+  const context = getRequestContext(req);
+
+  await softDeleteUserService(userId, context);
 
   return res
     .status(200)

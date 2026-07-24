@@ -1,5 +1,6 @@
 import { Router } from "express";
 
+import { authenticate } from "../../middlewares/authenticate.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
 
 import {
@@ -33,6 +34,7 @@ import {
 const companyAccessRouter = Router({
   mergeParams: true,
 });
+companyAccessRouter.use(authenticate);
 
 companyAccessRouter.post(
   "/",
@@ -90,6 +92,7 @@ companyAccessRouter.delete(
 const userCompanyAccessRouter = Router({
   mergeParams: true,
 });
+userCompanyAccessRouter.use(authenticate);
 
 userCompanyAccessRouter.get(
   "/",

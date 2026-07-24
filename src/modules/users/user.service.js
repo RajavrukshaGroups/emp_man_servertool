@@ -1,5 +1,59 @@
 import { ApiError } from "../../utils/ApiError.js";
 import User from "./user.model.js";
+import CompanyAccess from "../company-access/companyAccess.model.js";
+
+const isPlatformScope = (context = {}) => context.roleScopeType === "ORG";
+
+const ensureCompanyContext = (context = {}) => {
+  console.log("ensureCompanyContext()");
+  console.dir(context, { depth: null });
+
+  if (isPlatformScope(context)) {
+    return;
+  }
+
+  if (!context.companyId) {
+    throw new ApiError(403, "Active company context is required.");
+  }
+};
+
+const getCompanyUserIds = async (companyId) => {
+  const accessRecords = await CompanyAccess.find({
+    companyId,
+    isDeleted: false,
+    status: {
+      $in: ["ONBOARDING", "ACTIVE", "INACTIVE"],
+    },
+  })
+    .select("userId")
+    .lean();
+
+  return accessRecords.map((access) => access.userId);
+};
+
+const ensureUserBelongsToCompany = async (userId, context = {}) => {
+  if (isPlatformScope(context)) {
+    return;
+  }
+
+  ensureCompanyContext(context);
+
+  const companyAccess = await CompanyAccess.findOne({
+    userId,
+    companyId: context.companyId,
+    isDeleted: false,
+  })
+    .select("_id")
+    .lean();
+
+  if (!companyAccess) {
+    /*
+     * Return 404 rather than 403 so users cannot discover
+     * records belonging to another company.
+     */
+    throw new ApiError(404, "User not found.");
+  }
+};
 
 /**
  * Normalize an optional mobile number.
@@ -102,20 +156,33 @@ export const createUser = async (userData, actorId = null) => {
 /**
  * List users with pagination, filters, search and sorting.
  */
-export const listUsers = async ({
-  page = 1,
-  limit = 10,
-  search,
-  status,
-  gender,
-  emailVerified,
-  mobileVerified,
-  sortBy = "createdAt",
-  sortOrder = "desc",
-}) => {
+export const listUsers = async (
+  {
+    page = 1,
+    limit = 10,
+    search,
+    status,
+    gender,
+    emailVerified,
+    mobileVerified,
+    sortBy = "createdAt",
+    sortOrder = "desc",
+  },
+  context = {},
+) => {
   const filter = {
     isDeleted: false,
   };
+
+  if (!isPlatformScope(context)) {
+    ensureCompanyContext(context);
+
+    const companyUserIds = await getCompanyUserIds(context.companyId);
+
+    filter._id = {
+      $in: companyUserIds,
+    };
+  }
 
   if (status) {
     filter.status = status;
@@ -183,7 +250,9 @@ export const listUsers = async ({
 /**
  * Get one user by ID.
  */
-export const getUserById = async (userId) => {
+export const getUserById = async (userId, context = {}) => {
+  await ensureUserBelongsToCompany(userId, context);
+
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,
@@ -201,7 +270,14 @@ export const getUserById = async (userId) => {
 /**
  * Update user profile and account details.
  */
-export const updateUser = async (userId, updateData, actorId = null) => {
+/**
+ * Update user profile and account details.
+ */
+export const updateUser = async (userId, updateData, context = {}) => {
+  await ensureUserBelongsToCompany(userId, context);
+
+  const actorId = context.actorId ?? null;
+
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,
@@ -222,6 +298,10 @@ export const updateUser = async (userId, updateData, actorId = null) => {
     await ensureEmailIsUnique(normalizedEmail, userId);
 
     normalizedUpdateData.email = normalizedEmail;
+
+    if (normalizedEmail !== user.email) {
+      normalizedUpdateData.emailVerified = false;
+    }
   }
 
   if (updateData.mobile !== undefined) {
@@ -234,13 +314,6 @@ export const updateUser = async (userId, updateData, actorId = null) => {
     if (normalizedMobile !== user.mobile) {
       normalizedUpdateData.mobileVerified = false;
     }
-  }
-
-  if (
-    updateData.email !== undefined &&
-    updateData.email.toLowerCase() !== user.email
-  ) {
-    normalizedUpdateData.emailVerified = false;
   }
 
   delete normalizedUpdateData.password;
@@ -267,13 +340,21 @@ export const updateUser = async (userId, updateData, actorId = null) => {
     .select("-password")
     .lean();
 
+  if (!updatedUser) {
+    throw new ApiError(404, "User not found.");
+  }
+
   return updatedUser;
 };
 
 /**
  * Activate, deactivate or suspend a user.
  */
-export const updateUserStatus = async (userId, status, actorId = null) => {
+export const updateUserStatus = async (userId, status, context = {}) => {
+  await ensureUserBelongsToCompany(userId, context);
+
+  const actorId = context.actorId ?? null;
+
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,
@@ -337,7 +418,11 @@ export const changePassword = async (
  *
  * This does not require the current password.
  */
-export const resetPassword = async (userId, newPassword, actorId = null) => {
+export const resetPassword = async (userId, newPassword, context = {}) => {
+  await ensureUserBelongsToCompany(userId, context);
+
+  const actorId = context.actorId ?? null;
+
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,
@@ -367,7 +452,11 @@ export const resetPassword = async (userId, newPassword, actorId = null) => {
 /**
  * Soft-delete a user.
  */
-export const softDeleteUser = async (userId, actorId = null) => {
+export const softDeleteUser = async (userId, context = {}) => {
+  await ensureUserBelongsToCompany(userId, context);
+
+  const actorId = context.actorId ?? null;
+
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,

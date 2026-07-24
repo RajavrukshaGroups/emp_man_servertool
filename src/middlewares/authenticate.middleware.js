@@ -137,6 +137,8 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
     companyAccess,
   };
 
+  console.log("AUTH USER:");
+  console.dir(req.user, { depth: null });
   next();
 });
 

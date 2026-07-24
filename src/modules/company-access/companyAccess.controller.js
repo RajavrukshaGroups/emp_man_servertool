@@ -18,11 +18,12 @@ import {
  */
 export const createCompanyAccess = asyncHandler(async (req, res) => {
   const { companyId } = req.validated.params;
+  const actorId = req.user?.userId ?? null;
 
   const access = await createCompanyAccessService(
     companyId,
     req.validated.body,
-    req.user?._id ?? null,
+    actorId,
   );
 
   return res
@@ -74,7 +75,7 @@ export const updateCompanyAccess = asyncHandler(async (req, res) => {
     companyId,
     accessId,
     req.validated.body,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -92,7 +93,7 @@ export const updateCompanyAccessStatus = asyncHandler(async (req, res) => {
     companyId,
     accessId,
     req.validated.body,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -118,7 +119,7 @@ export const updateCompanyAccessRole = asyncHandler(async (req, res) => {
     companyId,
     accessId,
     roleId,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -140,7 +141,7 @@ export const updateReportingManager = asyncHandler(async (req, res) => {
     companyId,
     accessId,
     reportingManagerId,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -165,7 +166,7 @@ export const deleteCompanyAccess = asyncHandler(async (req, res) => {
   await softDeleteCompanyAccessService(
     companyId,
     accessId,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
