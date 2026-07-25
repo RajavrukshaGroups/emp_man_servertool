@@ -343,8 +343,9 @@ const buildCompanyAccessFilter = async ({
   }
 
   if (search) {
-    const searchRegex = new RegExp(search, "i");
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+    const searchRegex = new RegExp(escapedSearch, "i");
     const matchingUsers = await User.find({
       isDeleted: false,
       $or: [
@@ -417,10 +418,10 @@ export const createEmployee = async ({ companyId, payload, actorUserId }) => {
     );
   }
 
-  if (companyAccess.status !== "ACTIVE") {
+  if (!["ONBOARDING", "ACTIVE"].includes(companyAccess.status)) {
     throw new ApiError(
       400,
-      "An employee profile cannot be created for inactive company access.",
+      "An employee profile cannot be created for this company access status.",
     );
   }
 

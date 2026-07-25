@@ -49,8 +49,6 @@ const documentSchema = z
     fileUrl: optionalString(1000),
 
     expiryDate: z.coerce.date().nullable().optional(),
-
-    isVerified: z.boolean().optional(),
   })
   .strict();
 
@@ -64,14 +62,7 @@ const personalDetailsSchema = z
       .optional(),
 
     maritalStatus: z
-      .enum([
-        "SINGLE",
-        "MARRIED",
-        "DIVORCED",
-        "WIDOWED",
-        "SEPARATED",
-        "OTHER",
-      ])
+      .enum(["SINGLE", "MARRIED", "DIVORCED", "WIDOWED", "SEPARATED", "OTHER"])
       .nullable()
       .optional(),
 
@@ -202,15 +193,7 @@ export const listEmployeesSchema = z.object({
 
       employmentType: z.string().trim().max(100).optional(),
 
-      sortBy: z
-        .enum([
-          "createdAt",
-          "updatedAt",
-          "status",
-          "employeeCode",
-          "joiningDate",
-        ])
-        .default("createdAt"),
+      sortBy: z.enum(["createdAt", "updatedAt", "status"]).default("createdAt"),
 
       sortOrder: z.enum(["asc", "desc"]).default("desc"),
     })
