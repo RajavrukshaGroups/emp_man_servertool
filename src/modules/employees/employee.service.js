@@ -37,7 +37,7 @@ const employeePopulateOptions = [
         populate: {
           path: "userId",
           select:
-            "firstName middleName lastName displayName email mobile profilePhoto status",
+            "firstName middleName lastName displayName email mobile profilePhoto status onboardingStatus onboardingCompletedAt",
         },
       },
     ],
@@ -429,7 +429,7 @@ export const createEmployee = async ({ companyId, payload, actorUserId }) => {
     _id: companyAccess.userId,
     isDeleted: false,
   })
-    .select("_id status")
+    .select("_id status onboardingStatus")
     .lean();
 
   if (!user) {
@@ -473,24 +473,98 @@ export const createEmployee = async ({ companyId, payload, actorUserId }) => {
     statutoryDetails: payload.statutoryDetails,
   });
 
-  const employee = new Employee({
-    companyId,
-    companyAccessId: companyAccess._id,
-    userId: companyAccess.userId,
-    personalDetails: payload.personalDetails,
-    contactDetails: payload.contactDetails,
-    emergencyContacts: payload.emergencyContacts,
-    bankDetails: payload.bankDetails,
-    statutoryDetails: payload.statutoryDetails,
-    documents: payload.documents,
-    status: "ACTIVE",
-    createdBy: actorUserId,
-    updatedBy: actorUserId,
-  });
+  const session = await mongoose.startSession();
 
-  await employee.save();
+  try {
+    let createdEmployeeId;
 
-  return Employee.findById(employee._id).populate(employeePopulateOptions);
+    await session.withTransaction(async () => {
+      const [createdEmployee] = await Employee.create(
+        [
+          {
+            companyId,
+            companyAccessId: companyAccess._id,
+            userId: companyAccess.userId,
+
+            personalDetails: payload.personalDetails,
+            contactDetails: payload.contactDetails,
+            emergencyContacts: payload.emergencyContacts,
+            bankDetails: payload.bankDetails,
+            statutoryDetails: payload.statutoryDetails,
+            documents: payload.documents,
+
+            status: "ACTIVE",
+
+            createdBy: actorUserId,
+            updatedBy: actorUserId,
+          },
+        ],
+        {
+          session,
+        },
+      );
+
+      createdEmployeeId = createdEmployee._id;
+
+      const updatedUser = await User.findOneAndUpdate(
+        {
+          _id: companyAccess.userId,
+          isDeleted: false,
+        },
+        {
+          $set: {
+            onboardingStatus: "COMPLETED",
+            onboardingCompletedAt: new Date(),
+            updatedBy: actorUserId,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+          session,
+        },
+      );
+
+      if (!updatedUser) {
+        throw new ApiError(
+          404,
+          "User could not be updated after employee profile creation.",
+        );
+      }
+
+      const updatedCompanyAccess = await CompanyAccess.findOneAndUpdate(
+        {
+          _id: companyAccess._id,
+          companyId,
+          isDeleted: false,
+        },
+        {
+          $set: {
+            status: "ACTIVE",
+            updatedBy: actorUserId,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+          session,
+        },
+      );
+
+      if (!updatedCompanyAccess) {
+        throw new ApiError(
+          404,
+          "Company access could not be updated after employee profile creation.",
+        );
+      }
+    });
+
+    return Employee.findById(createdEmployeeId).populate(
+      employeePopulateOptions,
+    );
+  } finally {
+    await session.endSession();
+  }
 };
 
 export const listEmployees = async ({ companyId, query }) => {

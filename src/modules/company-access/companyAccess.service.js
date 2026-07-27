@@ -15,7 +15,7 @@ const companyAccessPopulate = [
   {
     path: "userId",
     select:
-      "firstName middleName lastName displayName email mobile profilePhoto status",
+      "firstName middleName lastName displayName email mobile profilePhoto status onboardingStatus onboardingCompletedAt",
   },
   {
     path: "companyId",
@@ -293,6 +293,9 @@ const findCompanyAccessDocument = async (companyId, accessId) => {
 /**
  * Create company access.
  */
+/**
+ * Create company access.
+ */
 export const createCompanyAccess = async (
   companyId,
   accessData,
@@ -369,6 +372,32 @@ export const createCompanyAccess = async (
       );
 
       createdAccessId = createdAccess._id;
+
+      const updatedUser = await User.findOneAndUpdate(
+        {
+          _id: accessData.userId,
+          isDeleted: false,
+        },
+        {
+          $set: {
+            onboardingStatus: "COMPANY_ACCESS_CREATED",
+            onboardingCompletedAt: null,
+            updatedBy: actorId,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+          session,
+        },
+      );
+
+      if (!updatedUser) {
+        throw new ApiError(
+          404,
+          "User could not be updated after company access creation.",
+        );
+      }
     });
 
     return CompanyAccess.findById(createdAccessId)

@@ -99,6 +99,18 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
 
+    onboardingStatus: {
+      type: String,
+      enum: ["USER_CREATED", "COMPANY_ACCESS_CREATED", "COMPLETED"],
+      default: "USER_CREATED",
+      index: true,
+    },
+
+    onboardingCompletedAt: {
+      type: Date,
+      default: null,
+    },
+
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -161,6 +173,12 @@ userSchema.index({
 });
 
 userSchema.index({
+  createdAt: -1,
+});
+
+userSchema.index({
+  onboardingStatus: 1,
+  isDeleted: 1,
   createdAt: -1,
 });
 
