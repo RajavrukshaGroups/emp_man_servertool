@@ -13,6 +13,7 @@ import departmentRoutes from "../modules/departments/department.routes.js";
 import teamRoutes from "../modules/teams/team.routes.js";
 import employeeRoutes from "../modules/employees/employee.routes.js";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes.js";
+import onboardingRoutes from "../modules/onboarding/onboarding.route.js";
 
 import { ApiResponse } from "../utils/ApiResponse.js";
 
@@ -47,5 +48,6 @@ router.use("/companies/:companyId/teams", teamRoutes);
 router.use("/companies/:companyId/employees", employeeRoutes);
 router.use("/users/:userId/company-access", userCompanyAccessRouter);
 router.use("/companies/:companyId/dashboard", dashboardRoutes);
+router.use("/onboarding", onboardingRoutes);
 
 export default router;

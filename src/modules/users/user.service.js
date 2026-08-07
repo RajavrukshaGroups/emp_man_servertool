@@ -123,9 +123,21 @@ const ensureMobileIsUnique = async (mobile, excludeUserId = null) => {
 /**
  * Create a user.
  */
-export const createUser = async (userData, actorId = null) => {
-  const normalizedEmail = userData.email.toLowerCase();
-  const normalizedMobile = normalizeMobile(userData.mobile);
+export const createUser = async (userData, context = {}) => {
+  const { actorId = null, companyId = null } = context;
+
+  const { forEmployeeOnboarding = false, ...userPayload } = userData;
+
+  if (forEmployeeOnboarding && !companyId) {
+    throw new ApiError(
+      400,
+      "Active company context is required for employee onboarding.",
+    );
+  }
+
+  const normalizedEmail = userPayload.email.toLowerCase();
+
+  const normalizedMobile = normalizeMobile(userPayload.mobile);
 
   await Promise.all([
     ensureEmailIsUnique(normalizedEmail),
@@ -133,19 +145,33 @@ export const createUser = async (userData, actorId = null) => {
   ]);
 
   const user = await User.create({
-    firstName: userData.firstName,
-    middleName: userData.middleName ?? "",
-    lastName: userData.lastName,
-    displayName: userData.displayName ?? "",
+    firstName: userPayload.firstName,
+    middleName: userPayload.middleName ?? "",
+    lastName: userPayload.lastName,
+    displayName: userPayload.displayName ?? "",
+
     email: normalizedEmail,
     mobile: normalizedMobile,
-    password: userData.password,
-    profilePhoto: userData.profilePhoto ?? "",
-    gender: userData.gender ?? "PREFER_NOT_TO_SAY",
-    dateOfBirth: userData.dateOfBirth ?? null,
-    status: userData.status ?? "ACTIVE",
-    emailVerified: userData.emailVerified ?? false,
-    mobileVerified: userData.mobileVerified ?? false,
+
+    password: userPayload.password,
+
+    profilePhoto: userPayload.profilePhoto ?? "",
+
+    gender: userPayload.gender ?? "PREFER_NOT_TO_SAY",
+
+    dateOfBirth: userPayload.dateOfBirth ?? null,
+
+    status: userPayload.status ?? "ACTIVE",
+
+    emailVerified: userPayload.emailVerified ?? false,
+
+    mobileVerified: userPayload.mobileVerified ?? false,
+
+    onboardingStatus: "USER_CREATED",
+
+    onboardingCompanyId: forEmployeeOnboarding ? companyId : null,
+
+    onboardingCompletedAt: null,
     createdBy: actorId,
     updatedBy: actorId,
   });

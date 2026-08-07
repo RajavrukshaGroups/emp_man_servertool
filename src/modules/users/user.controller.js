@@ -25,7 +25,8 @@ const getRequestContext = (req) => ({
 export const createUser = asyncHandler(async (req, res) => {
   const context = getRequestContext(req);
 
-  const user = await createUserService(req.validated.body, context.actorId);
+  // const user = await createUserService(req.validated.body, context.actorId);
+  const user = await createUserService(req.validated.body, context);
 
   return res
     .status(201)

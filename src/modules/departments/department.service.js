@@ -5,6 +5,7 @@ import { ApiError } from "../../utils/ApiError.js";
 import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Department from "./department.model.js";
+import Employee from "../employees/employee.model.js";
 
 const departmentPopulate = [
   {
@@ -458,6 +459,17 @@ export const getDepartmentById = async ({ companyId, departmentId }) => {
     lean: true,
   });
 
+  const departmentAccessRecords = await CompanyAccess.find({
+    companyId,
+    departmentId,
+    isDeleted: false,
+    status: "ACTIVE",
+  })
+    .select("_id")
+    .lean();
+
+  const companyAccessIds = departmentAccessRecords.map((access) => access._id);
+
   const [childDepartmentCount, assignedEmployeeCount] = await Promise.all([
     Department.countDocuments({
       companyId,
@@ -465,13 +477,13 @@ export const getDepartmentById = async ({ companyId, departmentId }) => {
       isDeleted: false,
     }),
 
-    CompanyAccess.countDocuments({
+    Employee.countDocuments({
       companyId,
-      departmentId,
-      isDeleted: false,
-      status: {
-        $in: ["ACTIVE", "ONBOARDING"],
+      companyAccessId: {
+        $in: companyAccessIds,
       },
+      isDeleted: false,
+      status: "ACTIVE",
     }),
   ]);
 

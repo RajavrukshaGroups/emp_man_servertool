@@ -69,6 +69,7 @@ export const createUserSchema = z.object({
 
       password: passwordSchema,
 
+      forEmployeeOnboarding: z.boolean().optional().default(false),
       profilePhoto: z
         .string()
         .trim()

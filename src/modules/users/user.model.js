@@ -106,6 +106,13 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
 
+    onboardingCompanyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+      index: true,
+    },
+
     onboardingCompletedAt: {
       type: Date,
       default: null,
@@ -177,6 +184,7 @@ userSchema.index({
 });
 
 userSchema.index({
+  onboardingCompanyId: 1,
   onboardingStatus: 1,
   isDeleted: 1,
   createdAt: -1,
