@@ -114,3 +114,135 @@ export const companyAdministratorCompanyIdSchema = z.object({
 
   query: z.object({}).strict().optional(),
 });
+
+export const updateCompanyAdministratorSchema = z.object({
+  body: z
+    .object({
+      firstName: z
+        .string()
+        .trim()
+        .min(2, "First name must contain at least 2 characters.")
+        .max(100, "First name cannot exceed 100 characters.")
+        .optional(),
+
+      middleName: optionalText(100),
+
+      lastName: z
+        .string()
+        .trim()
+        .min(1, "Last name is required.")
+        .max(100, "Last name cannot exceed 100 characters.")
+        .optional(),
+
+      displayName: optionalText(200),
+
+      email: z
+        .string()
+        .trim()
+        .email("Invalid email address.")
+        .max(150, "Email cannot exceed 150 characters.")
+        .optional(),
+
+      mobile: optionalMobileSchema,
+
+      gender: z
+        .enum(["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"])
+        .optional(),
+
+      dateOfBirth: dateSchema.optional().nullable(),
+
+      employeeCode: z
+        .string()
+        .trim()
+        .min(1, "Employee code is required.")
+        .max(50, "Employee code cannot exceed 50 characters.")
+        .optional(),
+
+      designation: z
+        .string()
+        .trim()
+        .min(2, "Designation must contain at least 2 characters.")
+        .max(100, "Designation cannot exceed 100 characters.")
+        .optional(),
+
+      employmentType: z
+        .enum([
+          "FULL_TIME",
+          "PART_TIME",
+          "CONTRACT",
+          "INTERN",
+          "CONSULTANT",
+          "FREELANCER",
+        ])
+        .optional(),
+
+      joiningDate: dateSchema.optional().nullable(),
+
+      workLocationType: z
+        .enum(["HEAD_OFFICE", "BRANCH", "REMOTE", "HYBRID", "CLIENT_LOCATION"])
+        .optional(),
+
+      workLocationName: optionalText(150),
+
+      emailVerified: z.boolean().optional(),
+
+      mobileVerified: z.boolean().optional(),
+
+      notes: optionalText(1000),
+    })
+    .strict()
+    .refine((body) => Object.keys(body).length > 0, {
+      message: "At least one field is required for update.",
+    }),
+
+  params: z
+    .object({
+      companyId: objectIdSchema,
+    })
+    .strict(),
+
+  query: z.object({}).strict().optional(),
+});
+
+export const resetCompanyAdministratorPasswordSchema = z.object({
+  body: z
+    .object({
+      newPassword: z
+        .string()
+        .min(8, "New password must contain at least 8 characters.")
+        .max(128, "New password cannot exceed 128 characters."),
+
+      confirmPassword: z.string().min(1, "Confirm password is required."),
+    })
+    .refine((body) => body.newPassword === body.confirmPassword, {
+      path: ["confirmPassword"],
+      message: "New password and confirmation password do not match.",
+    })
+    .strict(),
+
+  params: z
+    .object({
+      companyId: objectIdSchema,
+    })
+    .strict(),
+
+  query: z.object({}).strict().optional(),
+});
+
+export const updateCompanyAdministratorStatusSchema = z.object({
+  body: z
+    .object({
+      status: z.enum(["ACTIVE", "INACTIVE"], {
+        message: "Status must be either ACTIVE or INACTIVE.",
+      }),
+    })
+    .strict(),
+
+  params: z
+    .object({
+      companyId: objectIdSchema,
+    })
+    .strict(),
+
+  query: z.object({}).strict().optional(),
+});

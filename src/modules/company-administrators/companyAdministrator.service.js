@@ -53,7 +53,7 @@ const getActiveCompany = async (companyId) => {
   if (company.status !== "ACTIVE") {
     throw new ApiError(
       400,
-      "Company administrator cannot be created for an inactive company.",
+      "Company administrator cannot be managed for an inactive company.",
     );
   }
 
@@ -585,6 +585,528 @@ export const createCompanyAdministrator = async (
     }
 
     throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * Ensure email is globally unique while excluding
+ * the current administrator user.
+ */
+const ensureEmailIsUniqueForUpdate = async (email, excludeUserId) => {
+  const existingUser = await User.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+    _id: {
+      $ne: excludeUserId,
+    },
+  })
+    .select("_id email")
+    .lean();
+
+  if (existingUser) {
+    throw new ApiError(409, "A user with this email address already exists.");
+  }
+};
+
+/**
+ * Ensure mobile is globally unique while excluding
+ * the current administrator user.
+ */
+const ensureMobileIsUniqueForUpdate = async (mobile, excludeUserId) => {
+  const normalizedMobile = normalizeMobile(mobile);
+
+  if (!normalizedMobile) {
+    return;
+  }
+
+  const existingUser = await User.findOne({
+    mobile: normalizedMobile,
+    isDeleted: false,
+    _id: {
+      $ne: excludeUserId,
+    },
+  })
+    .select("_id mobile")
+    .lean();
+
+  if (existingUser) {
+    throw new ApiError(409, "A user with this mobile number already exists.");
+  }
+};
+
+/**
+ * Ensure employee code is unique inside the company
+ * while excluding the current administrator access record.
+ */
+const ensureEmployeeCodeIsUniqueForUpdate = async (
+  companyId,
+  employeeCode,
+  excludeAccessId,
+) => {
+  const normalizedEmployeeCode = normalizeEmployeeCode(employeeCode);
+
+  if (!normalizedEmployeeCode) {
+    return;
+  }
+
+  const existingAccess = await CompanyAccess.findOne({
+    companyId,
+    employeeCode: normalizedEmployeeCode,
+    isDeleted: false,
+    _id: {
+      $ne: excludeAccessId,
+    },
+  })
+    .select("_id employeeCode")
+    .lean();
+
+  if (existingAccess) {
+    throw new ApiError(
+      409,
+      "This employee code is already assigned within the company.",
+    );
+  }
+};
+
+/**
+ * Update the current Company Administrator.
+ *
+ * This updates:
+ * 1. User profile/account information
+ * 2. Company-specific CompanyAccess information
+ *
+ * Password and status are intentionally handled
+ * through separate APIs.
+ */
+export const updateCompanyAdministrator = async (
+  companyId,
+  updateData,
+  actorId = null,
+) => {
+  await getActiveCompany(companyId);
+
+  const companyAdministratorRole = await getCompanyAdministratorRole(companyId);
+
+  const access = await CompanyAccess.findOne({
+    companyId,
+    roleId: companyAdministratorRole._id,
+    isDeleted: false,
+    status: {
+      $in: ["ONBOARDING", "ACTIVE", "INACTIVE"],
+    },
+  });
+
+  if (!access) {
+    throw new ApiError(
+      404,
+      "Company Administrator is not assigned to this company.",
+    );
+  }
+
+  const user = await User.findOne({
+    _id: access.userId,
+    isDeleted: false,
+  });
+
+  if (!user) {
+    throw new ApiError(
+      404,
+      "Company Administrator user account was not found.",
+    );
+  }
+
+  const normalizedEmail =
+    updateData.email !== undefined
+      ? updateData.email.trim().toLowerCase()
+      : undefined;
+
+  const normalizedMobile =
+    updateData.mobile !== undefined
+      ? normalizeMobile(updateData.mobile)
+      : undefined;
+
+  const normalizedEmployeeCode =
+    updateData.employeeCode !== undefined
+      ? normalizeEmployeeCode(updateData.employeeCode)
+      : undefined;
+
+  /**
+   * Validate uniqueness before transaction.
+   */
+  const uniquenessChecks = [];
+
+  if (normalizedEmail !== undefined) {
+    uniquenessChecks.push(
+      ensureEmailIsUniqueForUpdate(normalizedEmail, user._id),
+    );
+  }
+
+  if (normalizedMobile !== undefined) {
+    uniquenessChecks.push(
+      ensureMobileIsUniqueForUpdate(normalizedMobile, user._id),
+    );
+  }
+
+  if (normalizedEmployeeCode !== undefined) {
+    uniquenessChecks.push(
+      ensureEmployeeCodeIsUniqueForUpdate(
+        companyId,
+        normalizedEmployeeCode,
+        access._id,
+      ),
+    );
+  }
+
+  await Promise.all(uniquenessChecks);
+
+  const session = await mongoose.startSession();
+
+  try {
+    await session.withTransaction(async () => {
+      /**
+       * -------------------------
+       * Update User
+       * -------------------------
+       */
+      const userFields = [
+        "firstName",
+        "middleName",
+        "lastName",
+        "displayName",
+        "gender",
+        "dateOfBirth",
+        "emailVerified",
+        "mobileVerified",
+      ];
+
+      for (const field of userFields) {
+        if (updateData[field] !== undefined) {
+          user[field] = updateData[field];
+        }
+      }
+
+      if (normalizedEmail !== undefined) {
+        /**
+         * If email changes, verification should normally
+         * be cleared unless explicitly provided.
+         */
+        if (normalizedEmail !== user.email) {
+          user.email = normalizedEmail;
+
+          if (updateData.emailVerified === undefined) {
+            user.emailVerified = false;
+          }
+        }
+      }
+
+      if (normalizedMobile !== undefined) {
+        /**
+         * Same logic for mobile verification.
+         */
+        if (normalizedMobile !== user.mobile) {
+          user.mobile = normalizedMobile;
+
+          if (updateData.mobileVerified === undefined) {
+            user.mobileVerified = false;
+          }
+        }
+      }
+
+      user.updatedBy = actorId;
+
+      await user.save({
+        session,
+      });
+
+      /**
+       * -------------------------
+       * Update CompanyAccess
+       * -------------------------
+       */
+      const accessFields = [
+        "designation",
+        "employmentType",
+        "joiningDate",
+        "workLocationType",
+        "workLocationName",
+        "notes",
+      ];
+
+      for (const field of accessFields) {
+        if (updateData[field] !== undefined) {
+          access[field] = updateData[field];
+        }
+      }
+
+      if (normalizedEmployeeCode !== undefined) {
+        access.employeeCode = normalizedEmployeeCode;
+      }
+
+      /**
+       * These protected properties intentionally remain unchanged:
+       *
+       * companyId
+       * roleId
+       * userId
+       * isPrimaryCompany
+       * status
+       */
+      access.updatedBy = actorId;
+
+      await access.save({
+        session,
+      });
+    });
+
+    const updatedAccess = await CompanyAccess.findById(access._id)
+      .populate({
+        path: "userId",
+        select:
+          "firstName middleName lastName displayName email mobile profilePhoto gender dateOfBirth status emailVerified mobileVerified onboardingStatus onboardingCompanyId onboardingCompletedAt createdAt updatedAt",
+      })
+      .populate({
+        path: "companyId",
+        select: "name legalName code slug logo email phone status",
+      })
+      .populate({
+        path: "roleId",
+        select: "name code description scopeType status",
+      })
+      .lean();
+
+    if (!updatedAccess) {
+      throw new ApiError(
+        500,
+        "Company Administrator was updated but could not be retrieved.",
+      );
+    }
+
+    return {
+      company: updatedAccess.companyId,
+
+      administrator: updatedAccess.userId,
+
+      companyAccess: {
+        _id: updatedAccess._id,
+
+        employeeCode: updatedAccess.employeeCode,
+
+        designation: updatedAccess.designation,
+
+        employmentType: updatedAccess.employmentType,
+
+        departmentId: updatedAccess.departmentId,
+
+        teamId: updatedAccess.teamId,
+
+        reportingManagerId: updatedAccess.reportingManagerId,
+
+        joiningDate: updatedAccess.joiningDate,
+
+        workLocationType: updatedAccess.workLocationType,
+
+        workLocationName: updatedAccess.workLocationName,
+
+        isPrimaryCompany: updatedAccess.isPrimaryCompany,
+
+        status: updatedAccess.status,
+
+        notes: updatedAccess.notes,
+
+        createdAt: updatedAccess.createdAt,
+
+        updatedAt: updatedAccess.updatedAt,
+      },
+
+      role: updatedAccess.roleId,
+    };
+  } catch (error) {
+    if (error?.code === 11000) {
+      const duplicateField = Object.keys(error.keyPattern ?? {})[0];
+
+      if (duplicateField === "email") {
+        throw new ApiError(
+          409,
+          "A user with this email address already exists.",
+        );
+      }
+
+      if (duplicateField === "mobile") {
+        throw new ApiError(
+          409,
+          "A user with this mobile number already exists.",
+        );
+      }
+
+      if (duplicateField === "employeeCode") {
+        throw new ApiError(
+          409,
+          "This employee code is already assigned within the company.",
+        );
+      }
+
+      throw new ApiError(
+        409,
+        "A conflicting administrator record already exists.",
+      );
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * Reset the current Company Administrator password.
+ *
+ * Intended for GLOBAL Super Admin management flow.
+ */
+export const resetCompanyAdministratorPassword = async (
+  companyId,
+  newPassword,
+  actorId = null,
+) => {
+  await getActiveCompany(companyId);
+
+  const companyAdministratorRole = await getCompanyAdministratorRole(companyId);
+
+  const access = await CompanyAccess.findOne({
+    companyId,
+    roleId: companyAdministratorRole._id,
+    isDeleted: false,
+    status: {
+      $in: ["ONBOARDING", "ACTIVE", "INACTIVE"],
+    },
+  })
+    .select("_id userId")
+    .lean();
+
+  if (!access) {
+    throw new ApiError(
+      404,
+      "Company Administrator is not assigned to this company.",
+    );
+  }
+
+  const user = await User.findOne({
+    _id: access.userId,
+    isDeleted: false,
+  }).select("+password");
+
+  if (!user) {
+    throw new ApiError(
+      404,
+      "Company Administrator user account was not found.",
+    );
+  }
+
+  /**
+   * Prevent resetting to the current password.
+   */
+  const isSamePassword = await user.comparePassword(newPassword);
+
+  if (isSamePassword) {
+    throw new ApiError(
+      400,
+      "New password must be different from the current password.",
+    );
+  }
+
+  /**
+   * Setting password + save() is important.
+   * Your User model pre-save hook will hash it.
+   */
+  user.password = newPassword;
+  user.updatedBy = actorId;
+
+  await user.save();
+
+  return {
+    userId: user._id,
+    companyAccessId: access._id,
+  };
+};
+
+/**
+ * Activate or deactivate the Company Administrator.
+ *
+ * Both the global User account and the selected CompanyAccess
+ * are updated so an inactive administrator cannot authenticate
+ * or access the company.
+ */
+export const updateCompanyAdministratorStatus = async (
+  companyId,
+  status,
+  actorId = null,
+) => {
+  await getActiveCompany(companyId);
+
+  const companyAdministratorRole = await getCompanyAdministratorRole(companyId);
+
+  const access = await CompanyAccess.findOne({
+    companyId,
+    roleId: companyAdministratorRole._id,
+    isDeleted: false,
+    status: {
+      $in: ["ONBOARDING", "ACTIVE", "INACTIVE"],
+    },
+  });
+
+  if (!access) {
+    throw new ApiError(
+      404,
+      "Company Administrator is not assigned to this company.",
+    );
+  }
+
+  const user = await User.findOne({
+    _id: access.userId,
+    isDeleted: false,
+  });
+
+  if (!user) {
+    throw new ApiError(
+      404,
+      "Company Administrator user account was not found.",
+    );
+  }
+
+  if (access.status === status && user.status === status) {
+    throw new ApiError(
+      400,
+      `Company Administrator is already ${status.toLowerCase()}.`,
+    );
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    await session.withTransaction(async () => {
+      user.status = status;
+      user.updatedBy = actorId;
+
+      await user.save({
+        session,
+      });
+
+      access.status = status;
+      access.updatedBy = actorId;
+
+      await access.save({
+        session,
+      });
+    });
+
+    return {
+      userId: user._id,
+
+      companyAccessId: access._id,
+
+      status,
+    };
   } finally {
     await session.endSession();
   }

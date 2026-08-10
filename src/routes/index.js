@@ -1,20 +1,23 @@
 import { Router } from "express";
 
 import companyRoutes from "../modules/companies/company.routes.js";
-import companyAdministratorRoutes from "../modules/company-administrators/companyAdministrator.routes.js";
 import permissionRoutes from "../modules/permissions/permission.routes.js";
 import roleRoutes from "../modules/roles/role.routes.js";
 import userRoutes from "../modules/users/user.routes.js";
+
 import {
   userCompanyAccessRouter,
   companyAccessRouter,
 } from "../modules/company-access/companyAccess.routes.js";
+
 import authRoutes from "../modules/auth/auth.routes.js";
 import departmentRoutes from "../modules/departments/department.routes.js";
 import teamRoutes from "../modules/teams/team.routes.js";
 import employeeRoutes from "../modules/employees/employee.routes.js";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes.js";
 import onboardingRoutes from "../modules/onboarding/onboarding.route.js";
+
+import companyAdministratorRoutes from "../modules/company-administrators/companyAdministrator.routes.js";
 
 import { ApiResponse } from "../utils/ApiResponse.js";
 
@@ -37,27 +40,47 @@ router.get("/health", (req, res) => {
     );
 });
 
+/**
+ * Authentication
+ */
 router.use("/auth", authRoutes);
 
+/**
+ * Global resources
+ */
 router.use("/permissions", permissionRoutes);
-
-router.use("/companies", companyRoutes);
+router.use("/users", userRoutes);
+router.use("/users/:userId/company-access", userCompanyAccessRouter);
 
 /**
- * Company Administrator Provisioning
- * Only Super Admin can create the initial Company Administrator
- * for a specific company.
+ * IMPORTANT:
+ * Company-specific nested routes MUST come before
+ * the generic /companies router.
  */
 router.use("/companies/:companyId/administrators", companyAdministratorRoutes);
 
 router.use("/companies/:companyId/roles", roleRoutes);
-router.use("/users", userRoutes);
+
 router.use("/companies/:companyId/access", companyAccessRouter);
+
 router.use("/companies/:companyId/departments", departmentRoutes);
+
 router.use("/companies/:companyId/teams", teamRoutes);
+
 router.use("/companies/:companyId/employees", employeeRoutes);
-router.use("/users/:userId/company-access", userCompanyAccessRouter);
+
 router.use("/companies/:companyId/dashboard", dashboardRoutes);
+
+/**
+ * Generic company-management routes.
+ *
+ * Keep this AFTER all company nested routes.
+ */
+router.use("/companies", companyRoutes);
+
+/**
+ * Onboarding
+ */
 router.use("/onboarding", onboardingRoutes);
 
 export default router;
