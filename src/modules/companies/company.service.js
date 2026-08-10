@@ -1,7 +1,9 @@
+import mongoose from "mongoose";
 import slugify from "slugify";
 
 import { ApiError } from "../../utils/ApiError.js";
 import Company from "./company.model.js";
+import { provisionDefaultCompanyRoles } from "../roles/defaultCompanyRoles.service.js";
 
 const generateCompanySlug = (name, code) => {
   const nameSlug = slugify(name, {
@@ -77,16 +79,46 @@ export const createCompany = async (companyData, actorId = null) => {
     slug,
   });
 
-  const company = await Company.create({
-    ...companyData,
-    code: normalizedCode,
-    currency: companyData.currency?.toUpperCase() || "INR",
-    slug,
-    createdBy: actorId,
-    updatedBy: actorId,
-  });
+  const session = await mongoose.startSession();
 
-  return company;
+  try {
+    let createdCompanyId;
+
+    await session.withTransaction(async () => {
+      const [company] = await Company.create(
+        [
+          {
+            ...companyData,
+
+            code: normalizedCode,
+
+            currency: companyData.currency?.toUpperCase() || "INR",
+
+            slug,
+
+            createdBy: actorId,
+
+            updatedBy: actorId,
+          },
+        ],
+        {
+          session,
+        },
+      );
+
+      createdCompanyId = company._id;
+
+      await provisionDefaultCompanyRoles({
+        companyId: company._id,
+        actorId,
+        session,
+      });
+    });
+
+    return Company.findById(createdCompanyId).lean();
+  } finally {
+    await session.endSession();
+  }
 };
 
 export const listCompanies = async ({

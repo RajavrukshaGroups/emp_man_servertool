@@ -3,6 +3,7 @@ import { connectDatabase, disconnectDatabase } from "../config/database.js";
 import { PERMISSION_LIST } from "../constants/permissions.constants.js";
 
 import Permission from "../modules/permissions/permission.model.js";
+import Role from "../modules/roles/role.model.js";
 
 const getPermissionName = (code) => {
   return code
@@ -51,11 +52,53 @@ const seedPermissions = async () => {
   });
 };
 
+const seedGlobalRoles = async () => {
+  const permissions = await Permission.find({
+    code: {
+      $in: PERMISSION_LIST,
+    },
+    status: "ACTIVE",
+  })
+    .select("_id")
+    .lean();
+
+  const permissionIds = permissions.map((permission) => permission._id);
+
+  await Role.findOneAndUpdate(
+    {
+      code: "SUPER_ADMIN",
+      scopeType: "GLOBAL",
+      isDeleted: false,
+    },
+    {
+      $set: {
+        companyId: null,
+        name: "Super Administrator",
+        description:
+          "Platform administrator with full access across all companies and platform operations.",
+        permissionIds,
+        scopeType: "GLOBAL",
+        isSystemRole: true,
+        isEditable: false,
+        status: "ACTIVE",
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+      runValidators: true,
+    },
+  );
+
+  console.log("Global roles seeded successfully.");
+};
+
 const runSeed = async () => {
   try {
     await connectDatabase();
 
     await seedPermissions();
+    await seedGlobalRoles();
 
     console.log("Database seeding completed successfully.");
   } catch (error) {

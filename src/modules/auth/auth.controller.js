@@ -119,7 +119,11 @@ export const getMe = asyncHandler(async (req, res) => {
   const result = await getMeService({
     userId: req.user.userId,
 
-    companyAccessId: req.user.companyAccessId,
+    accessType: req.user.accessType,
+
+    companyAccessId: req.user.companyAccessId ?? null,
+
+    platformAccessId: req.user.platformAccessId ?? null,
   });
 
   return res

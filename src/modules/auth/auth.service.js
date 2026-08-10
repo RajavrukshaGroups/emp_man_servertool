@@ -7,6 +7,7 @@ import Role from "../roles/role.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 
 import RefreshToken from "./refreshToken.model.js";
+import PlatformAccess from "../platform-access/platformAccess.model.js";
 
 import {
   generateAccessToken,
@@ -27,6 +28,17 @@ const accessPopulate = [
   {
     path: "roleId",
     select: "name code description scopeType status permissionIds",
+    populate: {
+      path: "permissionIds",
+      select: "name code module action description status",
+    },
+  },
+];
+
+const platformAccessPopulate = [
+  {
+    path: "roleId",
+    select: "name code description scopeType status permissionIds companyId",
     populate: {
       path: "permissionIds",
       select: "name code module action description status",
@@ -103,6 +115,14 @@ const getActiveUserCompanyAccess = async (userId) => {
     });
 };
 
+const getActiveUserPlatformAccess = async (userId) => {
+  return PlatformAccess.findOne({
+    userId,
+    isDeleted: false,
+    status: "ACTIVE",
+  }).populate(platformAccessPopulate);
+};
+
 /**
  * Select the requested company access.
  */
@@ -176,23 +196,74 @@ const validateSelectedCompanyAccess = (access) => {
   }
 };
 
+const validateSelectedPlatformAccess = (platformAccess) => {
+  if (!platformAccess) {
+    throw new ApiError(403, "Active platform access is unavailable.");
+  }
+
+  if (!platformAccess.roleId) {
+    throw new ApiError(403, "No platform role is assigned to this account.");
+  }
+
+  if (platformAccess.roleId.status !== "ACTIVE") {
+    throw new ApiError(
+      403,
+      "The platform role assigned to this account is inactive.",
+    );
+  }
+
+  if (platformAccess.roleId.scopeType !== "GLOBAL") {
+    throw new ApiError(403, "Platform access requires a GLOBAL role.");
+  }
+
+  if (platformAccess.roleId.companyId) {
+    throw new ApiError(403, "A GLOBAL role cannot belong to a company.");
+  }
+};
+
 /**
  * Create access and refresh tokens.
  */
 const issueAuthenticationTokens = async ({
   user,
-  companyAccess,
+
+  accessType,
+
+  companyAccess = null,
+  platformAccess = null,
+
   rememberMe = false,
+
   ipAddress = "",
+
   userAgent = "",
+
   session = null,
 }) => {
   const refreshTokenId = new mongoose.Types.ObjectId();
 
+  const isGlobal = accessType === "GLOBAL";
+
+  const accessRecord = isGlobal ? platformAccess : companyAccess;
+
+  if (!accessRecord) {
+    throw new ApiError(
+      500,
+      `${isGlobal ? "Platform" : "Company"} access is required.`,
+    );
+  }
+
   const refreshToken = generateRefreshToken({
     userId: user._id,
-    companyAccessId: companyAccess._id,
+
+    accessType,
+
+    companyAccessId: companyAccess?._id ?? null,
+
+    platformAccessId: platformAccess?._id ?? null,
+
     tokenId: refreshTokenId,
+
     rememberMe,
   });
 
@@ -202,11 +273,21 @@ const issueAuthenticationTokens = async ({
 
   const refreshTokenRecord = {
     _id: refreshTokenId,
+
     userId: user._id,
-    companyAccessId: companyAccess._id,
+
+    accessType,
+
+    companyAccessId: companyAccess?._id ?? null,
+
+    platformAccessId: platformAccess?._id ?? null,
+
     tokenHash: refreshTokenHash,
+
     expiresAt,
+
     createdByIp: normalizeIpAddress(ipAddress),
+
     userAgent: userAgent.slice(0, 500),
   };
 
@@ -218,17 +299,30 @@ const issueAuthenticationTokens = async ({
     await RefreshToken.create(refreshTokenRecord);
   }
 
+  const role = accessRecord.roleId;
+
   const accessToken = generateAccessToken({
     userId: user._id,
-    companyAccessId: companyAccess._id,
-    companyId: companyAccess.companyId._id ?? companyAccess.companyId,
-    roleId: companyAccess.roleId._id ?? companyAccess.roleId,
-    employeeCode: companyAccess.employeeCode,
+
+    accessType,
+
+    companyAccessId: companyAccess?._id ?? null,
+
+    platformAccessId: platformAccess?._id ?? null,
+
+    companyId:
+      companyAccess?.companyId?._id ?? companyAccess?.companyId ?? null,
+
+    roleId: role?._id ?? role,
+
+    employeeCode: companyAccess?.employeeCode ?? null,
   });
 
   return {
     accessToken,
+
     refreshToken,
+
     refreshTokenExpiresAt: expiresAt,
   };
 };
@@ -304,6 +398,86 @@ const buildAuthenticationResponse = ({ user, companyAccess, accessToken }) => {
   };
 };
 
+const buildPlatformAuthenticationResponse = ({
+  user,
+  platformAccess,
+  accessToken,
+}) => {
+  const role = platformAccess.roleId;
+
+  const permissions = Array.isArray(role?.permissionIds)
+    ? role.permissionIds
+        .filter((permission) => permission && permission.status === "ACTIVE")
+        .map((permission) => ({
+          _id: permission._id,
+
+          name: permission.name,
+
+          code: permission.code,
+
+          module: permission.module,
+
+          action: permission.action,
+        }))
+    : [];
+
+  return {
+    accessToken,
+
+    accessType: "GLOBAL",
+
+    user: {
+      _id: user._id,
+
+      firstName: user.firstName,
+
+      middleName: user.middleName,
+
+      lastName: user.lastName,
+
+      displayName: user.displayName,
+
+      email: user.email,
+
+      mobile: user.mobile,
+
+      profilePhoto: user.profilePhoto,
+
+      gender: user.gender,
+
+      dateOfBirth: user.dateOfBirth,
+
+      emailVerified: user.emailVerified,
+
+      mobileVerified: user.mobileVerified,
+
+      lastLoginAt: user.lastLoginAt,
+    },
+
+    platformAccess: {
+      _id: platformAccess._id,
+
+      status: platformAccess.status,
+    },
+
+    companyAccess: null,
+
+    company: null,
+
+    role: {
+      _id: role._id,
+
+      name: role.name,
+
+      code: role.code,
+
+      scopeType: role.scopeType,
+
+      permissions,
+    },
+  };
+};
+
 /**
  * Login using email/mobile and password.
  */
@@ -323,10 +497,50 @@ export const login = async ({
     throw new ApiError(401, "Invalid email/mobile number or password.");
   }
 
+  const platformAccess = await getActiveUserPlatformAccess(user._id);
+
+  if (platformAccess) {
+    validateSelectedPlatformAccess(platformAccess);
+
+    const tokens = await issueAuthenticationTokens({
+      user,
+
+      accessType: "GLOBAL",
+
+      platformAccess,
+
+      rememberMe,
+
+      ipAddress,
+
+      userAgent,
+    });
+
+    user.lastLoginAt = new Date();
+
+    await user.save({
+      validateBeforeSave: false,
+    });
+
+    return {
+      data: buildPlatformAuthenticationResponse({
+        user,
+
+        platformAccess,
+
+        accessToken: tokens.accessToken,
+      }),
+
+      refreshToken: tokens.refreshToken,
+
+      refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+    };
+  }
   const accessRecords = await getActiveUserCompanyAccess(user._id);
 
   const companyAccess = selectCompanyAccess({
     accessRecords,
+
     companyId,
   });
 
@@ -334,11 +548,37 @@ export const login = async ({
 
   const tokens = await issueAuthenticationTokens({
     user,
+
+    accessType: "COMPANY",
+
     companyAccess,
+
     rememberMe,
+
     ipAddress,
+
     userAgent,
   });
+
+  user.lastLoginAt = new Date();
+
+  await user.save({
+    validateBeforeSave: false,
+  });
+
+  return {
+    data: buildAuthenticationResponse({
+      user,
+
+      companyAccess,
+
+      accessToken: tokens.accessToken,
+    }),
+
+    refreshToken: tokens.refreshToken,
+
+    refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+  };
 
   user.lastLoginAt = new Date();
   await user.save({
@@ -377,7 +617,6 @@ export const refreshAuthenticationToken = async ({
   const storedToken = await RefreshToken.findOne({
     _id: payload.jti,
     userId: payload.sub,
-    companyAccessId: payload.accessId,
   }).select("+tokenHash");
 
   if (!storedToken) {
@@ -385,10 +624,6 @@ export const refreshAuthenticationToken = async ({
   }
 
   if (storedToken.isRevoked || storedToken.revokedAt) {
-    /*
-     * Possible reuse of an already rotated token.
-     * Revoke all sessions for safety.
-     */
     await RefreshToken.updateMany(
       {
         userId: storedToken.userId,
@@ -418,30 +653,58 @@ export const refreshAuthenticationToken = async ({
     throw new ApiError(401, "Invalid refresh token.");
   }
 
-  const [user, companyAccess] = await Promise.all([
-    User.findOne({
-      _id: payload.sub,
-      status: "ACTIVE",
-      isDeleted: false,
-    }),
+  const accessType = storedToken.accessType ?? payload.accessType ?? "COMPANY";
 
-    CompanyAccess.findOne({
-      _id: payload.accessId,
-      userId: payload.sub,
-      status: "ACTIVE",
-      isDeleted: false,
-    }).populate(accessPopulate),
-  ]);
+  const user = await User.findOne({
+    _id: payload.sub,
+    status: "ACTIVE",
+    isDeleted: false,
+  });
 
   if (!user) {
     throw new ApiError(401, "User account is unavailable.");
   }
 
-  if (!companyAccess) {
-    throw new ApiError(401, "Company access is unavailable.");
-  }
+  let companyAccess = null;
+  let platformAccess = null;
 
-  validateSelectedCompanyAccess(companyAccess);
+  if (accessType === "GLOBAL") {
+    const platformAccessId =
+      storedToken.platformAccessId ??
+      payload.platformAccessId ??
+      payload.accessId;
+
+    platformAccess = await PlatformAccess.findOne({
+      _id: platformAccessId,
+      userId: payload.sub,
+      status: "ACTIVE",
+      isDeleted: false,
+    }).populate(platformAccessPopulate);
+
+    if (!platformAccess) {
+      throw new ApiError(401, "Platform access is unavailable.");
+    }
+
+    validateSelectedPlatformAccess(platformAccess);
+  } else {
+    const companyAccessId =
+      storedToken.companyAccessId ??
+      payload.companyAccessId ??
+      payload.accessId;
+
+    companyAccess = await CompanyAccess.findOne({
+      _id: companyAccessId,
+      userId: payload.sub,
+      status: "ACTIVE",
+      isDeleted: false,
+    }).populate(accessPopulate);
+
+    if (!companyAccess) {
+      throw new ApiError(401, "Company access is unavailable.");
+    }
+
+    validateSelectedCompanyAccess(companyAccess);
+  }
 
   const session = await mongoose.startSession();
 
@@ -451,9 +714,17 @@ export const refreshAuthenticationToken = async ({
     await session.withTransaction(async () => {
       newTokens = await issueAuthenticationTokens({
         user,
+
+        accessType,
+
         companyAccess,
+
+        platformAccess,
+
         ipAddress,
+
         userAgent,
+
         session,
       });
 
@@ -470,12 +741,21 @@ export const refreshAuthenticationToken = async ({
       });
     });
 
+    const data =
+      accessType === "GLOBAL"
+        ? buildPlatformAuthenticationResponse({
+            user,
+            platformAccess,
+            accessToken: newTokens.accessToken,
+          })
+        : buildAuthenticationResponse({
+            user,
+            companyAccess,
+            accessToken: newTokens.accessToken,
+          });
+
     return {
-      data: buildAuthenticationResponse({
-        user,
-        companyAccess,
-        accessToken: newTokens.accessToken,
-      }),
+      data,
 
       refreshToken: newTokens.refreshToken,
 
@@ -542,29 +822,66 @@ export const logoutAll = async ({ userId, ipAddress = "" }) => {
 /**
  * Get authenticated user profile.
  */
-export const getAuthenticatedUser = async ({ userId, companyAccessId }) => {
-  const [user, companyAccess] = await Promise.all([
-    User.findOne({
-      _id: userId,
-      status: "ACTIVE",
-      isDeleted: false,
-    })
-      .select(userPublicFields)
-      .lean(),
+export const getAuthenticatedUser = async ({
+  userId,
 
-    CompanyAccess.findOne({
-      _id: companyAccessId,
-      userId,
-      status: "ACTIVE",
-      isDeleted: false,
-    })
-      .populate(accessPopulate)
-      .lean(),
-  ]);
+  accessType = "COMPANY",
+
+  companyAccessId = null,
+
+  platformAccessId = null,
+}) => {
+  const user = await User.findOne({
+    _id: userId,
+    status: "ACTIVE",
+    isDeleted: false,
+  })
+    .select(userPublicFields)
+    .lean();
 
   if (!user) {
     throw new ApiError(404, "Authenticated user not found.");
   }
+
+  if (accessType === "GLOBAL") {
+    const platformAccess = await PlatformAccess.findOne({
+      _id: platformAccessId,
+
+      userId,
+
+      status: "ACTIVE",
+
+      isDeleted: false,
+    })
+      .populate(platformAccessPopulate)
+      .lean();
+
+    if (!platformAccess) {
+      throw new ApiError(403, "Active platform access not found.");
+    }
+
+    validateSelectedPlatformAccess(platformAccess);
+
+    return buildPlatformAuthenticationResponse({
+      user,
+
+      platformAccess,
+
+      accessToken: null,
+    });
+  }
+
+  const companyAccess = await CompanyAccess.findOne({
+    _id: companyAccessId,
+
+    userId,
+
+    status: "ACTIVE",
+
+    isDeleted: false,
+  })
+    .populate(accessPopulate)
+    .lean();
 
   if (!companyAccess) {
     throw new ApiError(403, "Active company access not found.");
@@ -574,7 +891,9 @@ export const getAuthenticatedUser = async ({ userId, companyAccessId }) => {
 
   return buildAuthenticationResponse({
     user,
+
     companyAccess,
+
     accessToken: null,
   });
 };

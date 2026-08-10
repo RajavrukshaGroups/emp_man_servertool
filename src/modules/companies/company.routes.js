@@ -1,5 +1,11 @@
 import { Router } from "express";
 
+import { authenticate } from "../../middlewares/authenticate.middleware.js";
+import {
+  authorize,
+  authorizeRoles,
+} from "../../middlewares/authorize.middleware.js";
+
 import { validate } from "../../middlewares/validate.middleware.js";
 
 import {
@@ -21,20 +27,58 @@ import {
 
 const router = Router();
 
-router.post("/", validate(createCompanySchema), createCompany);
+/**
+ * Every company-management endpoint is platform-level.
+ */
+router.use(authenticate);
 
-router.get("/", validate(listCompaniesSchema), listCompanies);
+/**
+ * Restrict this whole module to the platform Super Admin.
+ *
+ * Permission checks are still applied below as an additional layer.
+ */
+router.use(authorizeRoles("SUPER_ADMIN"));
 
-router.get("/:companyId", validate(companyIdParamSchema), getCompanyById);
+router.post(
+  "/",
+  authorize("company.create"),
+  validate(createCompanySchema),
+  createCompany,
+);
 
-router.patch("/:companyId", validate(updateCompanySchema), updateCompany);
+router.get(
+  "/",
+  authorize("company.read"),
+  validate(listCompaniesSchema),
+  listCompanies,
+);
+
+router.get(
+  "/:companyId",
+  authorize("company.read"),
+  validate(companyIdParamSchema),
+  getCompanyById,
+);
+
+router.patch(
+  "/:companyId",
+  authorize("company.update"),
+  validate(updateCompanySchema),
+  updateCompany,
+);
 
 router.patch(
   "/:companyId/status",
+  authorize("company.deactivate"),
   validate(companyStatusSchema),
   updateCompanyStatus,
 );
 
-router.delete("/:companyId", validate(companyIdParamSchema), deleteCompany);
+router.delete(
+  "/:companyId",
+  authorize("company.deactivate"),
+  validate(companyIdParamSchema),
+  deleteCompany,
+);
 
 export default router;

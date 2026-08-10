@@ -28,18 +28,61 @@ const JWT_SESSION_REFRESH_EXPIRES_IN =
  */
 export const generateAccessToken = ({
   userId,
-  companyAccessId,
-  companyId,
+
+  accessType = "COMPANY",
+
+  companyAccessId = null,
+  platformAccessId = null,
+
+  companyId = null,
+
   roleId,
-  employeeCode,
+
+  employeeCode = null,
 }) => {
+  const isGlobal = accessType === "GLOBAL";
+
+  const accessId = isGlobal ? platformAccessId : companyAccessId;
+
+  if (!accessId) {
+    throw new ApiError(
+      500,
+      `${isGlobal ? "Platform" : "Company"} access ID is required.`,
+    );
+  }
+
+  if (!roleId) {
+    throw new ApiError(
+      500,
+      "Role ID is required when generating an access token.",
+    );
+  }
+
+  if (!isGlobal && !companyId) {
+    throw new ApiError(
+      500,
+      "Company ID is required for company access tokens.",
+    );
+  }
+
   return jwt.sign(
     {
       sub: userId.toString(),
-      accessId: companyAccessId.toString(),
-      companyId: companyId.toString(),
+
+      accessId: accessId.toString(),
+
+      accessType,
+
+      companyAccessId: companyAccessId?.toString() ?? null,
+
+      platformAccessId: platformAccessId?.toString() ?? null,
+
+      companyId: companyId?.toString() ?? null,
+
       roleId: roleId.toString(),
+
       employeeCode: employeeCode ?? null,
+
       tokenType: "ACCESS",
     },
     JWT_ACCESS_SECRET,
@@ -58,19 +101,45 @@ export const generateAccessToken = ({
  */
 export const generateRefreshToken = ({
   userId,
-  companyAccessId,
+
+  accessType = "COMPANY",
+
+  companyAccessId = null,
+  platformAccessId = null,
+
   tokenId,
+
   rememberMe = false,
 }) => {
   const expiresIn = rememberMe
     ? JWT_REFRESH_EXPIRES_IN
     : JWT_SESSION_REFRESH_EXPIRES_IN;
 
+  const isGlobal = accessType === "GLOBAL";
+
+  const accessId = isGlobal ? platformAccessId : companyAccessId;
+
+  if (!accessId) {
+    throw new ApiError(
+      500,
+      `${isGlobal ? "Platform" : "Company"} access ID is required.`,
+    );
+  }
+
   return jwt.sign(
     {
       sub: userId.toString(),
-      accessId: companyAccessId.toString(),
+
+      accessId: accessId.toString(),
+
+      accessType,
+
+      companyAccessId: companyAccessId?.toString() ?? null,
+
+      platformAccessId: platformAccessId?.toString() ?? null,
+
       jti: tokenId.toString(),
+
       tokenType: "REFRESH",
     },
     JWT_REFRESH_SECRET,

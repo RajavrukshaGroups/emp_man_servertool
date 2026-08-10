@@ -2,7 +2,8 @@ import { ApiError } from "../../utils/ApiError.js";
 import User from "./user.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 
-const isPlatformScope = (context = {}) => context.roleScopeType === "ORG";
+// const isPlatformScope = (context = {}) => context.roleScopeType === "ORG";
+const isPlatformScope = (context = {}) => context.roleScopeType === "GLOBAL";
 
 const ensureCompanyContext = (context = {}) => {
   console.log("ensureCompanyContext()");

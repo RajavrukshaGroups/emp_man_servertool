@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import companyRoutes from "../modules/companies/company.routes.js";
+import companyAdministratorRoutes from "../modules/company-administrators/companyAdministrator.routes.js";
 import permissionRoutes from "../modules/permissions/permission.routes.js";
 import roleRoutes from "../modules/roles/role.routes.js";
 import userRoutes from "../modules/users/user.routes.js";
@@ -39,7 +40,16 @@ router.get("/health", (req, res) => {
 router.use("/auth", authRoutes);
 
 router.use("/permissions", permissionRoutes);
+
 router.use("/companies", companyRoutes);
+
+/**
+ * Company Administrator Provisioning
+ * Only Super Admin can create the initial Company Administrator
+ * for a specific company.
+ */
+router.use("/companies/:companyId/administrators", companyAdministratorRoutes);
+
 router.use("/companies/:companyId/roles", roleRoutes);
 router.use("/users", userRoutes);
 router.use("/companies/:companyId/access", companyAccessRouter);

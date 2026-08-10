@@ -10,7 +10,11 @@ export const enforceCompanyContext = (req, _res, next) => {
   /**
    * ORG-level users may access multiple companies.
    */
-  if (roleScopeType === "ORG") {
+  // if (roleScopeType === "ORG") {
+  //   return next();
+  // }
+
+  if (roleScopeType === "GLOBAL") {
     return next();
   }
 

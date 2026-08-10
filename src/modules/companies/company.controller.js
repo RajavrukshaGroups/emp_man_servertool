@@ -13,7 +13,7 @@ import {
 export const createCompany = asyncHandler(async (req, res) => {
   const { body } = req.validated;
 
-  const company = await createCompanyService(body, req.user?._id ?? null);
+  const company = await createCompanyService(body, req.user?.userId ?? null);
 
   return res
     .status(201)
@@ -47,7 +47,7 @@ export const updateCompany = asyncHandler(async (req, res) => {
   const company = await updateCompanyService(
     companyId,
     body,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -62,7 +62,7 @@ export const updateCompanyStatus = asyncHandler(async (req, res) => {
   const company = await updateCompanyStatusService(
     companyId,
     status,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -81,7 +81,7 @@ export const updateCompanyStatus = asyncHandler(async (req, res) => {
 export const deleteCompany = asyncHandler(async (req, res) => {
   const { companyId } = req.validated.params;
 
-  await softDeleteCompanyService(companyId, req.user?._id ?? null);
+  await softDeleteCompanyService(companyId, req.user?.userId ?? null);
 
   return res
     .status(200)

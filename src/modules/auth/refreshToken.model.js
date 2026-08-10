@@ -9,10 +9,25 @@ const refreshTokenSchema = new mongoose.Schema(
       index: true,
     },
 
+    accessType: {
+      type: String,
+      enum: ["COMPANY", "GLOBAL"],
+      default: "COMPANY",
+      required: true,
+      index: true,
+    },
+
     companyAccessId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "CompanyAccess",
-      required: [true, "Company access is required."],
+      default: null,
+      index: true,
+    },
+
+    platformAccessId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PlatformAccess",
+      default: null,
       index: true,
     },
 
@@ -87,6 +102,41 @@ const refreshTokenSchema = new mongoose.Schema(
  * MongoDB TTL cleanup is asynchronous and may not happen
  * exactly at the expiry second.
  */
+
+refreshTokenSchema.pre("validate", function validateAccessContext() {
+  if (this.accessType === "COMPANY") {
+    if (!this.companyAccessId) {
+      this.invalidate(
+        "companyAccessId",
+        "Company access is required for company sessions.",
+      );
+    }
+
+    if (this.platformAccessId) {
+      this.invalidate(
+        "platformAccessId",
+        "Platform access cannot be set for company sessions.",
+      );
+    }
+  }
+
+  if (this.accessType === "GLOBAL") {
+    if (!this.platformAccessId) {
+      this.invalidate(
+        "platformAccessId",
+        "Platform access is required for global sessions.",
+      );
+    }
+
+    if (this.companyAccessId) {
+      this.invalidate(
+        "companyAccessId",
+        "Company access cannot be set for global sessions.",
+      );
+    }
+  }
+});
+
 refreshTokenSchema.index(
   {
     expiresAt: 1,
@@ -99,6 +149,12 @@ refreshTokenSchema.index(
 refreshTokenSchema.index({
   userId: 1,
   companyAccessId: 1,
+  isRevoked: 1,
+});
+
+refreshTokenSchema.index({
+  userId: 1,
+  platformAccessId: 1,
   isRevoked: 1,
 });
 
