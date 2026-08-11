@@ -21,7 +21,7 @@ export const createRole = asyncHandler(async (req, res) => {
   const role = await createRoleService(
     companyId,
     roleData,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -67,7 +67,7 @@ export const updateRole = asyncHandler(async (req, res) => {
     companyId,
     roleId,
     updateData,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -86,7 +86,7 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
     companyId,
     roleId,
     permissionIds,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   return res
@@ -105,7 +105,7 @@ export const updateRoleStatus = asyncHandler(async (req, res) => {
     companyId,
     roleId,
     status,
-    req.user?._id ?? null,
+    req.user?.userId ?? null,
   );
 
   const message =
@@ -122,7 +122,7 @@ export const updateRoleStatus = asyncHandler(async (req, res) => {
 export const deleteRole = asyncHandler(async (req, res) => {
   const { companyId, roleId } = req.validated.params;
 
-  await softDeleteRoleService(companyId, roleId, req.user?._id ?? null);
+  await softDeleteRoleService(companyId, roleId, req.user?.userId ?? null);
 
   return res
     .status(200)

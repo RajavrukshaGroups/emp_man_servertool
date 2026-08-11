@@ -48,12 +48,6 @@ export const createRoleSchema = z.object({
 
       permissionIds: permissionIdsSchema.default([]),
 
-      scopeType: z.literal("COMPANY").default("COMPANY"),
-
-      isSystemRole: z.boolean().default(false),
-
-      isEditable: z.boolean().default(true),
-
       status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
     })
     .strict(),

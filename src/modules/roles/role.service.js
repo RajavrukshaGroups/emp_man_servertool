@@ -127,11 +127,15 @@ export const createRole = async (companyId, roleData, actorId = null) => {
     code: normalizedCode,
     description: roleData.description ?? "",
     permissionIds,
+
     companyId,
     scopeType: "COMPANY",
-    isSystemRole: roleData.isSystemRole ?? false,
-    isEditable: roleData.isEditable ?? true,
+
+    isSystemRole: false,
+    isEditable: true,
+
     status: roleData.status ?? "ACTIVE",
+
     createdBy: actorId,
     updatedBy: actorId,
   });

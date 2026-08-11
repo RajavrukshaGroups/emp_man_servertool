@@ -1,6 +1,11 @@
 import { Router } from "express";
 
+import { authenticate } from "../../middlewares/authenticate.middleware.js";
+import { requireCompanyScope } from "../../middlewares/companyScope.middleware.js";
+import { authorize } from "../../middlewares/authorize.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
+
+import { PERMISSIONS } from "../../constants/permissions.constants.js";
 
 import {
   createRole,
@@ -25,22 +30,81 @@ const router = Router({
   mergeParams: true,
 });
 
-router.post("/", validate(createRoleSchema), createRole);
+/**
+ * Every company role API requires authentication
+ * and must belong to the authenticated company.
+ */
+router.use(authenticate);
+router.use(requireCompanyScope);
 
-router.get("/", validate(listRolesSchema), listRoles);
+/**
+ * Create custom role.
+ */
+router.post(
+  "/",
+  authorize(PERMISSIONS.ROLE_CREATE),
+  validate(createRoleSchema),
+  createRole,
+);
 
-router.get("/:roleId", validate(roleIdParamSchema), getRoleById);
+/**
+ * List company roles.
+ */
+router.get(
+  "/",
+  authorize(PERMISSIONS.ROLE_READ),
+  validate(listRolesSchema),
+  listRoles,
+);
 
-router.patch("/:roleId", validate(updateRoleSchema), updateRole);
+/**
+ * Get one company role.
+ */
+router.get(
+  "/:roleId",
+  authorize(PERMISSIONS.ROLE_READ),
+  validate(roleIdParamSchema),
+  getRoleById,
+);
 
+/**
+ * Update custom role.
+ */
+router.patch(
+  "/:roleId",
+  authorize(PERMISSIONS.ROLE_UPDATE),
+  validate(updateRoleSchema),
+  updateRole,
+);
+
+/**
+ * Replace permissions assigned to a custom role.
+ */
 router.patch(
   "/:roleId/permissions",
+  authorize(PERMISSIONS.ROLE_UPDATE),
   validate(updateRolePermissionsSchema),
   updateRolePermissions,
 );
 
-router.patch("/:roleId/status", validate(roleStatusSchema), updateRoleStatus);
+/**
+ * Activate / deactivate custom role.
+ */
+router.patch(
+  "/:roleId/status",
+  authorize(PERMISSIONS.ROLE_UPDATE),
+  validate(roleStatusSchema),
+  updateRoleStatus,
+);
 
-router.delete("/:roleId", validate(roleIdParamSchema), deleteRole);
+/**
+ * Soft delete custom role.
+ */
+router.delete(
+  "/:roleId",
+  authorize(PERMISSIONS.ROLE_DELETE),
+  validate(roleIdParamSchema),
+  deleteRole,
+);
 
 export default router;
