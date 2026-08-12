@@ -4,7 +4,9 @@ import companyRoutes from "../modules/companies/company.routes.js";
 import permissionRoutes from "../modules/permissions/permission.routes.js";
 import roleRoutes from "../modules/roles/role.routes.js";
 import userRoutes from "../modules/users/user.routes.js";
-
+import platformAccessRoutes, {
+  platformRoleRouter,
+} from "../modules/platform-access/platformAccess.routes.js";
 import {
   userCompanyAccessRouter,
   companyAccessRouter,
@@ -52,6 +54,11 @@ router.use("/permissions", permissionRoutes);
 router.use("/users", userRoutes);
 router.use("/users/:userId/company-access", userCompanyAccessRouter);
 
+/**
+ * Platform administration
+ */
+router.use("/platform/admins", platformAccessRoutes);
+router.use("/platform/roles", platformRoleRouter);
 /**
  * IMPORTANT:
  * Company-specific nested routes MUST come before
