@@ -21,6 +21,13 @@ const validateCompany = async (companyId) => {
     throw new ApiError(404, "Company not found.");
   }
 
+  if (company.status !== "ACTIVE") {
+    throw new ApiError(
+      400,
+      "Dashboard is unavailable for an inactive company.",
+    );
+  }
+
   return company;
 };
 
@@ -35,11 +42,17 @@ export const getDashboardSummary = async ({ companyId }) => {
     activeEmployees,
     onboardingEmployees,
     inactiveEmployees,
+
     totalDepartments,
     activeDepartments,
+
     totalTeams,
     activeTeams,
+
     totalRoles,
+
+    employeesWithoutDepartment,
+    employeesWithoutTeam,
   ] = await Promise.all([
     CompanyAccess.countDocuments({
       companyId,
@@ -89,6 +102,21 @@ export const getDashboardSummary = async ({ companyId }) => {
     Role.countDocuments({
       companyId,
       status: "ACTIVE",
+      isDeleted: false,
+    }),
+
+    CompanyAccess.countDocuments({
+      companyId,
+      isDeleted: false,
+      status: "ACTIVE",
+      departmentId: null,
+    }),
+
+    CompanyAccess.countDocuments({
+      companyId,
+      isDeleted: false,
+      status: "ACTIVE",
+      teamId: null,
     }),
   ]);
 
@@ -121,6 +149,11 @@ export const getDashboardSummary = async ({ companyId }) => {
 
     roles: {
       total: totalRoles,
+    },
+
+    organisation: {
+      employeesWithoutDepartment,
+      employeesWithoutTeam,
     },
   };
 };
