@@ -7,7 +7,10 @@ import { validate } from "../../middlewares/validate.middleware.js";
 
 import { PERMISSIONS } from "../../constants/permissions.constants.js";
 
-import { getDashboardSummary } from "./dashboard.controller.js";
+import {
+  getDashboardSummary,
+  getTeamLeadDashboardSummary,
+} from "./dashboard.controller.js";
 
 import { getDashboardSummarySchema } from "./dashboard.validation.js";
 
@@ -34,6 +37,14 @@ router.get(
   requireCompanyScope,
   validate(getDashboardSummarySchema),
   getDashboardSummary,
+);
+
+router.get(
+  "/team-lead",
+  authorize(PERMISSIONS.DASHBOARD_READ),
+  requireCompanyScope,
+  validate(getDashboardSummarySchema),
+  getTeamLeadDashboardSummary,
 );
 
 export default router;
