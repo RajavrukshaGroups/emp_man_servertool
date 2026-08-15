@@ -112,11 +112,13 @@ const ensureRoleBelongsToCompany = async (roleId, companyId) => {
   const role = await Role.findOne({
     _id: roleId,
     companyId,
-    scopeType: "COMPANY",
+    scopeType: {
+      $in: ["COMPANY", "DEPARTMENT", "TEAM"],
+    },
     status: "ACTIVE",
     isDeleted: false,
   })
-    .select("_id name code companyId status")
+    .select("_id name code companyId scopeType status")
     .lean();
 
   if (!role) {
@@ -127,6 +129,35 @@ const ensureRoleBelongsToCompany = async (roleId, companyId) => {
   }
 
   return role;
+};
+
+const validateRoleScopeAssignment = ({ role, departmentId, teamId }) => {
+  if (!role) {
+    return;
+  }
+
+  if (role.scopeType === "DEPARTMENT" && !departmentId) {
+    throw new ApiError(
+      400,
+      "A department must be assigned for a department-scoped role.",
+    );
+  }
+
+  if (role.scopeType === "TEAM") {
+    if (!departmentId) {
+      throw new ApiError(
+        400,
+        "A department must be assigned for a team-scoped role.",
+      );
+    }
+
+    if (!teamId) {
+      throw new ApiError(
+        400,
+        "A team must be assigned for a team-scoped role.",
+      );
+    }
+  }
 };
 
 /**
@@ -304,7 +335,6 @@ export const createCompanyAccess = async (
   await Promise.all([
     ensureCompanyExists(companyId),
     ensureUserExists(accessData.userId),
-    ensureRoleBelongsToCompany(accessData.roleId, companyId),
     ensureUserAccessIsUnique(companyId, accessData.userId),
     ensureEmployeeCodeIsUnique(companyId, accessData.employeeCode),
     ensureReportingManagerIsValid({
@@ -313,6 +343,13 @@ export const createCompanyAccess = async (
     }),
   ]);
 
+  const role = await ensureRoleBelongsToCompany(accessData.roleId, companyId);
+
+  validateRoleScopeAssignment({
+    role,
+    departmentId: accessData.departmentId,
+    teamId: accessData.teamId,
+  });
   const session = await mongoose.startSession();
 
   try {
@@ -579,10 +616,27 @@ export const updateCompanyAccess = async (
 ) => {
   const access = await findCompanyAccessDocument(companyId, accessId);
 
+  let nextRole = null;
+
   if (updateData.roleId !== undefined) {
-    await ensureRoleBelongsToCompany(updateData.roleId, companyId);
+    nextRole = await ensureRoleBelongsToCompany(updateData.roleId, companyId);
+  } else {
+    nextRole = await ensureRoleBelongsToCompany(access.roleId, companyId);
   }
 
+  const nextDepartmentId =
+    updateData.departmentId !== undefined
+      ? updateData.departmentId
+      : access.departmentId;
+
+  const nextTeamId =
+    updateData.teamId !== undefined ? updateData.teamId : access.teamId;
+
+  validateRoleScopeAssignment({
+    role: nextRole,
+    departmentId: nextDepartmentId,
+    teamId: nextTeamId,
+  });
   if (updateData.employeeCode !== undefined) {
     await ensureEmployeeCodeIsUnique(
       companyId,
@@ -696,10 +750,15 @@ export const updateCompanyAccessRole = async (
   roleId,
   actorId = null,
 ) => {
-  await Promise.all([
-    findCompanyAccessDocument(companyId, accessId),
-    ensureRoleBelongsToCompany(roleId, companyId),
-  ]);
+  const access = await findCompanyAccessDocument(companyId, accessId);
+
+  const role = await ensureRoleBelongsToCompany(roleId, companyId);
+
+  validateRoleScopeAssignment({
+    role,
+    departmentId: access.departmentId,
+    teamId: access.teamId,
+  });
 
   const updatedAccess = await CompanyAccess.findOneAndUpdate(
     {

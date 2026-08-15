@@ -35,6 +35,7 @@ export const listTeams = asyncHandler(async (req, res) => {
   const result = await listTeamsService({
     companyId: req.validated.params.companyId,
     query: req.validated.query,
+    requesterUserId: req.user.userId,
   });
 
   return res
@@ -49,6 +50,7 @@ export const getTeamById = asyncHandler(async (req, res) => {
   const team = await getTeamByIdService({
     companyId: req.validated.params.companyId,
     teamId: req.validated.params.teamId,
+    requesterUserId: req.user.userId,
   });
 
   return res

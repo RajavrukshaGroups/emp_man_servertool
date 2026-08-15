@@ -7,13 +7,6 @@ export const enforceCompanyContext = (req, _res, next) => {
   const activeCompanyId = req.user?.companyId;
   const roleScopeType = req.user?.roleScopeType;
 
-  /**
-   * ORG-level users may access multiple companies.
-   */
-  // if (roleScopeType === "ORG") {
-  //   return next();
-  // }
-
   if (roleScopeType === "GLOBAL") {
     return next();
   }
@@ -25,7 +18,7 @@ export const enforceCompanyContext = (req, _res, next) => {
   if (String(routeCompanyId) !== String(activeCompanyId)) {
     throw new ApiError(
       403,
-      "You cannot access employee records belonging to another company.",
+      "You cannot access records belonging to another company.",
     );
   }
 

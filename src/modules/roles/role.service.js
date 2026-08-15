@@ -82,10 +82,10 @@ const ensureRoleCodeIsUnique = async ({
     isDeleted: false,
   };
 
-  if (scopeType === "COMPANY") {
-    filter.companyId = companyId;
-  } else {
+  if (scopeType === "GLOBAL") {
     filter.companyId = null;
+  } else {
+    filter.companyId = companyId;
   }
 
   if (excludeRoleId) {
@@ -107,19 +107,25 @@ const ensureRoleCodeIsUnique = async ({
 };
 
 /**
- * Create a company-specific role.
+ * Create a company-bound role.
+ *
+ * Supported scopes:
+ * COMPANY
+ * DEPARTMENT
+ * TEAM
  */
 export const createRole = async (companyId, roleData, actorId = null) => {
   await ensureCompanyExists(companyId);
 
   const normalizedCode = roleData.code.toUpperCase();
 
+  const scopeType = roleData.scopeType ?? "COMPANY";
+
   await ensureRoleCodeIsUnique({
     companyId,
     code: normalizedCode,
-    scopeType: "COMPANY",
+    scopeType,
   });
-
   const permissionIds = await validatePermissionIds(roleData.permissionIds);
 
   const role = await Role.create({
@@ -129,7 +135,7 @@ export const createRole = async (companyId, roleData, actorId = null) => {
     permissionIds,
 
     companyId,
-    scopeType: "COMPANY",
+    scopeType,
 
     isSystemRole: false,
     isEditable: true,

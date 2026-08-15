@@ -42,7 +42,7 @@ const roleSchema = new mongoose.Schema(
 
     scopeType: {
       type: String,
-      enum: ["GLOBAL", "COMPANY"],
+      enum: ["GLOBAL", "COMPANY", "DEPARTMENT", "TEAM"],
       default: "COMPANY",
       index: true,
     },
@@ -151,10 +151,13 @@ roleSchema.pre("validate", function roleScopeValidation() {
     );
   }
 
-  if (this.scopeType === "COMPANY" && !this.companyId) {
+  if (
+    ["COMPANY", "DEPARTMENT", "TEAM"].includes(this.scopeType) &&
+    !this.companyId
+  ) {
     this.invalidate(
       "companyId",
-      "Company-specific roles must belong to a company.",
+      "Company, department and team scoped roles must belong to a company.",
     );
   }
 

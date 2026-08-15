@@ -16,6 +16,9 @@ import {
 const getRequestContext = (req) => ({
   actorId: req.user?.userId ?? null,
   companyId: req.user?.companyId ?? null,
+  companyAccessId: req.user?.companyAccessId ?? null,
+  departmentId: req.user?.companyAccess?.departmentId ?? null,
+  teamId: req.user?.companyAccess?.teamId ?? null,
   roleScopeType: req.user?.roleScopeType ?? null,
 });
 
@@ -38,9 +41,6 @@ export const createUser = asyncHandler(async (req, res) => {
  */
 export const listUsers = asyncHandler(async (req, res) => {
   const context = getRequestContext(req);
-
-  console.log("Controller Context");
-  console.dir(context, { depth: null });
 
   const result = await listUsersService(req.validated.query, context);
 

@@ -4,6 +4,7 @@ import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Department from "../departments/department.model.js";
 import Team from "./team.model.js";
+import Role from "../roles/role.model.js";
 
 const teamPopulate = [
   {
@@ -126,6 +127,60 @@ const findTeamOrFail = async (
   }
 
   return team;
+};
+
+/**
+ * Resolve the logged-in user's company access and role.
+ *
+ * This is used for data scoping.
+ *
+ * Examples:
+ * COMPANY    -> can access company-wide team data
+ * DEPARTMENT -> department-scoped data
+ * TEAM       -> only teams assigned to the logged-in Team Lead
+ */
+const getRequesterAccessContext = async ({ companyId, requesterUserId }) => {
+  if (!requesterUserId) {
+    throw new ApiError(401, "Authenticated user is required.");
+  }
+
+  const companyAccess = await CompanyAccess.findOne({
+    companyId,
+    userId: requesterUserId,
+    isDeleted: false,
+    status: {
+      $in: ["ACTIVE", "ONBOARDING"],
+    },
+  })
+    .select(
+      "_id userId companyId roleId departmentId teamId employeeCode status",
+    )
+    .lean();
+
+  if (!companyAccess) {
+    throw new ApiError(403, "You do not have active access to this company.");
+  }
+
+  const role = await Role.findOne({
+    _id: companyAccess.roleId,
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+  })
+    .select("_id name code scopeType")
+    .lean();
+
+  if (!role) {
+    throw new ApiError(
+      403,
+      "A valid active role is not assigned to your company access.",
+    );
+  }
+
+  return {
+    companyAccess,
+    role,
+  };
 };
 
 /**
@@ -355,10 +410,27 @@ export const createTeam = async ({
 
 /**
  * List teams.
+ *
+ * Data visibility is scoped by the logged-in user's role:
+ *
+ * COMPANY:
+ * - Can view teams across the company.
+ *
+ * DEPARTMENT:
+ * - Can view teams only inside the assigned department.
+ *
+ * TEAM:
+ * - Can view only teams where the logged-in CompanyAccess
+ *   is assigned as a team lead.
  */
-export const listTeams = async ({ companyId, query }) => {
+export const listTeams = async ({ companyId, query, requesterUserId }) => {
   await validateCompany(companyId, {
     requireActive: false,
+  });
+
+  const { companyAccess, role } = await getRequesterAccessContext({
+    companyId,
+    requesterUserId,
   });
 
   const {
@@ -376,6 +448,39 @@ export const listTeams = async ({ companyId, query }) => {
     companyId,
     isDeleted: false,
   };
+
+  /**
+   * ---------------------------------------------------------
+   * DATA SCOPE
+   * ---------------------------------------------------------
+   */
+
+  if (role.scopeType === "TEAM") {
+    /**
+     * A Team Lead can see only teams where their own
+     * CompanyAccess ID exists in teamLeadIds.
+     *
+     * This also supports one Team Lead managing multiple teams.
+     */
+    filter.teamLeadIds = companyAccess._id;
+  }
+
+  if (role.scopeType === "DEPARTMENT") {
+    if (!companyAccess.departmentId) {
+      throw new ApiError(
+        403,
+        "No department is assigned to your company access.",
+      );
+    }
+
+    filter.departmentId = companyAccess.departmentId;
+  }
+
+  /**
+   * COMPANY / ORG scoped roles remain company-wide here.
+   * Their route-level permissions still determine whether
+   * they may call team.read.
+   */
 
   if (search) {
     const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -402,7 +507,18 @@ export const listTeams = async ({ companyId, query }) => {
     ];
   }
 
-  if (departmentId) {
+  /**
+   * Only unrestricted/company-scoped users should be allowed
+   * to freely filter by department.
+   *
+   * A DEPARTMENT-scoped user's department cannot be overridden.
+   * A TEAM-scoped user's team visibility cannot be overridden.
+   */
+  if (
+    departmentId &&
+    role.scopeType !== "DEPARTMENT" &&
+    role.scopeType !== "TEAM"
+  ) {
     filter.departmentId = departmentId;
   }
 
@@ -410,7 +526,11 @@ export const listTeams = async ({ companyId, query }) => {
     filter.status = status;
   }
 
-  if (teamLeadId) {
+  /**
+   * Prevent Team Lead from using ?teamLeadId=<someone else>
+   * to alter the security filter.
+   */
+  if (teamLeadId && role.scopeType !== "TEAM") {
     filter.teamLeadIds = teamLeadId;
   }
 
@@ -449,16 +569,56 @@ export const listTeams = async ({ companyId, query }) => {
 
 /**
  * Get team by ID.
+ *
+ * The requested team must also fall inside the logged-in user's
+ * permitted data scope.
  */
-export const getTeamById = async ({ companyId, teamId }) => {
+export const getTeamById = async ({ companyId, teamId, requesterUserId }) => {
   await validateCompany(companyId, {
     requireActive: false,
+  });
+
+  const { companyAccess, role } = await getRequesterAccessContext({
+    companyId,
+    requesterUserId,
   });
 
   const team = await findTeamOrFail(companyId, teamId, {
     populate: true,
     lean: true,
   });
+
+  /**
+   * TEAM scope:
+   * logged-in Team Lead must actually be one of the leads
+   * assigned to this team.
+   */
+  if (role.scopeType === "TEAM") {
+    const isAssignedTeamLead = team.teamLeadIds?.some((teamLead) => {
+      const teamLeadCompanyAccessId =
+        teamLead?._id?.toString?.() ?? teamLead?.toString?.();
+
+      return teamLeadCompanyAccessId === companyAccess._id.toString();
+    });
+
+    if (!isAssignedTeamLead) {
+      throw new ApiError(403, "You do not have access to this team.");
+    }
+  }
+
+  /**
+   * DEPARTMENT scope:
+   * requested team must belong to the logged-in user's department.
+   */
+  if (role.scopeType === "DEPARTMENT") {
+    if (
+      !companyAccess.departmentId ||
+      team.departmentId?._id?.toString() !==
+        companyAccess.departmentId.toString()
+    ) {
+      throw new ApiError(403, "You do not have access to this team.");
+    }
+  }
 
   const assignedMemberCount = await CompanyAccess.countDocuments({
     companyId,

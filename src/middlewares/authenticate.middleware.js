@@ -113,11 +113,10 @@ const authenticateCompanyContext = async ({ payload, user }) => {
     throw new ApiError(403, "Assigned role is unavailable or inactive.");
   }
 
-  if (companyAccess.roleId.scopeType !== "COMPANY") {
-    throw new ApiError(
-      403,
-      "A company session requires a company-scoped role.",
-    );
+  const companyBoundRoleScopes = ["COMPANY", "DEPARTMENT", "TEAM"];
+
+  if (!companyBoundRoleScopes.includes(companyAccess.roleId.scopeType)) {
+    throw new ApiError(403, "A company session requires a company-bound role.");
   }
 
   if (companyAccess.roleId._id.toString() !== payload.roleId?.toString()) {
@@ -308,12 +307,6 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
       user,
     });
   }
-
-  console.log("AUTH USER:");
-
-  console.dir(req.user, {
-    depth: null,
-  });
 
   next();
 });

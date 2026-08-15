@@ -2,9 +2,10 @@ import mongoose from "mongoose";
 
 import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
+import Role from "../roles/role.model.js";
+import Team from "../teams/team.model.js";
 import User from "../users/user.model.js";
 import Employee from "./employee.model.js";
-
 import { ApiError } from "../../utils/ApiError.js";
 
 const { Types } = mongoose;
@@ -85,6 +86,72 @@ const ensureCompanyExists = async (companyId) => {
   }
 
   return company;
+};
+
+/**
+ * Resolve the authenticated user's company access and role.
+ *
+ * This context is used for data-level authorization.
+ */
+const getRequesterAccessContext = async ({ companyId, requesterUserId }) => {
+  if (!requesterUserId) {
+    throw new ApiError(401, "Authenticated user is required.");
+  }
+
+  const companyAccess = await CompanyAccess.findOne({
+    companyId,
+    userId: requesterUserId,
+    isDeleted: false,
+    status: {
+      $in: ["ACTIVE", "ONBOARDING"],
+    },
+  })
+    .select(
+      "_id userId companyId roleId departmentId teamId employeeCode status",
+    )
+    .lean();
+
+  if (!companyAccess) {
+    throw new ApiError(403, "You do not have active access to this company.");
+  }
+
+  const role = await Role.findOne({
+    _id: companyAccess.roleId,
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+  })
+    .select("_id name code scopeType")
+    .lean();
+
+  if (!role) {
+    throw new ApiError(
+      403,
+      "A valid active role is not assigned to your company access.",
+    );
+  }
+
+  return {
+    companyAccess,
+    role,
+  };
+};
+
+/**
+ * Return team IDs that the logged-in Team Lead is allowed to manage.
+ *
+ * Team.teamLeadIds stores CompanyAccess IDs, not User IDs.
+ */
+const getAllowedTeamIdsForTeamLead = async ({ companyId, companyAccessId }) => {
+  const teams = await Team.find({
+    companyId,
+    teamLeadIds: companyAccessId,
+    isDeleted: false,
+  })
+    .select("_id")
+    .lean();
+
+  return teams.map((team) => team._id);
 };
 
 const findEmployeeOrFail = async ({
@@ -567,8 +634,13 @@ export const createEmployee = async ({ companyId, payload, actorUserId }) => {
   }
 };
 
-export const listEmployees = async ({ companyId, query }) => {
+export const listEmployees = async ({ companyId, query, requesterUserId }) => {
   await ensureCompanyExists(companyId);
+
+  const { companyAccess, role } = await getRequesterAccessContext({
+    companyId,
+    requesterUserId,
+  });
 
   const {
     page,
@@ -583,14 +655,93 @@ export const listEmployees = async ({ companyId, query }) => {
     sortOrder,
   } = query;
 
+  /**
+   * ---------------------------------------------------------
+   * DATA SCOPE
+   * ---------------------------------------------------------
+   */
+
+  let scopedDepartmentId = departmentId;
+  let scopedTeamId = teamId;
+  let allowedTeamIds = null;
+
+  /**
+   * TEAM scoped users:
+   *
+   * A Team Lead can see employees only from teams where their
+   * own CompanyAccess._id exists in Team.teamLeadIds.
+   */
+  if (role.scopeType === "TEAM") {
+    allowedTeamIds = await getAllowedTeamIdsForTeamLead({
+      companyId,
+      companyAccessId: companyAccess._id,
+    });
+
+    /**
+     * Ignore department/team filters supplied by the client.
+     * Security scope must come from backend data.
+     */
+    scopedDepartmentId = undefined;
+    scopedTeamId = undefined;
+  }
+
+  /**
+   * DEPARTMENT scoped users:
+   *
+   * They can access employees only from their own department.
+   */
+  if (role.scopeType === "DEPARTMENT") {
+    if (!companyAccess.departmentId) {
+      throw new ApiError(
+        403,
+        "No department is assigned to your company access.",
+      );
+    }
+
+    scopedDepartmentId = companyAccess.departmentId;
+
+    /**
+     * teamId may still be used as an optional filter,
+     * but we'll verify it belongs to the user's department.
+     */
+    if (teamId) {
+      const requestedTeam = await Team.findOne({
+        _id: teamId,
+        companyId,
+        departmentId: companyAccess.departmentId,
+        isDeleted: false,
+      })
+        .select("_id")
+        .lean();
+
+      if (!requestedTeam) {
+        throw new ApiError(403, "You do not have access to the selected team.");
+      }
+
+      scopedTeamId = requestedTeam._id;
+    }
+  }
+
   const companyAccessFilter = await buildCompanyAccessFilter({
     companyId,
     search,
-    departmentId,
-    teamId,
+    departmentId: scopedDepartmentId,
+    teamId: scopedTeamId,
     roleId,
     employmentType,
   });
+
+  /**
+   * TEAM scope is applied here.
+   *
+   * CompanyAccess.teamId must belong to one of the teams
+   * managed by the logged-in Team Lead.
+   */
+  if (role.scopeType === "TEAM") {
+    companyAccessFilter.teamId = {
+      $in: allowedTeamIds,
+    };
+  }
 
   const companyAccessRecords = await CompanyAccess.find(companyAccessFilter)
     .select("_id")
@@ -607,7 +758,22 @@ export const listEmployees = async ({ companyId, query }) => {
     employeeFilter.status = status;
   }
 
-  if (search || departmentId || teamId || roleId || employmentType) {
+  /**
+   * For TEAM and DEPARTMENT scopes we must ALWAYS constrain
+   * employees by the permitted CompanyAccess IDs.
+   *
+   * Previously this happened only when a query filter existed,
+   * which allowed company-wide employee results.
+   */
+  if (
+    role.scopeType === "TEAM" ||
+    role.scopeType === "DEPARTMENT" ||
+    search ||
+    departmentId ||
+    teamId ||
+    roleId ||
+    employmentType
+  ) {
     employeeFilter.companyAccessId = {
       $in: companyAccessIds,
     };
@@ -651,13 +817,71 @@ export const listEmployees = async ({ companyId, query }) => {
   };
 };
 
-export const getEmployeeById = async ({ companyId, employeeId }) => {
+export const getEmployeeById = async ({
+  companyId,
+  employeeId,
+  requesterUserId,
+}) => {
   await ensureCompanyExists(companyId);
 
-  return findEmployeeOrFail({
+  const { companyAccess, role } = await getRequesterAccessContext({
+    companyId,
+    requesterUserId,
+  });
+
+  const employee = await findEmployeeOrFail({
     companyId,
     employeeId,
   });
+
+  /**
+   * TEAM scope:
+   *
+   * Employee must belong to one of the teams managed
+   * by the logged-in Team Lead.
+   */
+  if (role.scopeType === "TEAM") {
+    const allowedTeamIds = await getAllowedTeamIdsForTeamLead({
+      companyId,
+      companyAccessId: companyAccess._id,
+    });
+
+    const employeeTeamId =
+      employee.companyAccessId?.teamId?._id?.toString?.() ??
+      employee.companyAccessId?.teamId?.toString?.();
+
+    const hasAccess = allowedTeamIds.some(
+      (allowedTeamId) => allowedTeamId.toString() === employeeTeamId,
+    );
+
+    if (!hasAccess) {
+      throw new ApiError(403, "You do not have access to this employee.");
+    }
+  }
+
+  /**
+   * DEPARTMENT scope:
+   *
+   * Employee must belong to the logged-in user's department.
+   */
+  if (role.scopeType === "DEPARTMENT") {
+    if (!companyAccess.departmentId) {
+      throw new ApiError(
+        403,
+        "No department is assigned to your company access.",
+      );
+    }
+
+    const employeeDepartmentId =
+      employee.companyAccessId?.departmentId?._id?.toString?.() ??
+      employee.companyAccessId?.departmentId?.toString?.();
+
+    if (employeeDepartmentId !== companyAccess.departmentId.toString()) {
+      throw new ApiError(403, "You do not have access to this employee.");
+    }
+  }
+
+  return employee;
 };
 
 export const updateEmployee = async ({

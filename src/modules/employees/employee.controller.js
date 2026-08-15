@@ -34,6 +34,7 @@ export const listEmployees = asyncHandler(async (req, res) => {
   const result = await listEmployeesService({
     companyId,
     query,
+    requesterUserId: req.user.userId,
   });
 
   return res
@@ -47,6 +48,7 @@ export const getEmployeeById = asyncHandler(async (req, res) => {
   const employee = await getEmployeeByIdService({
     companyId,
     employeeId,
+    requesterUserId: req.user.userId,
   });
 
   return res

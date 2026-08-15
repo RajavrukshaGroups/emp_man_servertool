@@ -1,6 +1,7 @@
 import { ApiError } from "../../utils/ApiError.js";
 import User from "./user.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
+import Team from "../teams/team.model.js";
 
 // const isPlatformScope = (context = {}) => context.roleScopeType === "ORG";
 const isPlatformScope = (context = {}) => context.roleScopeType === "GLOBAL";
@@ -32,26 +33,92 @@ const getCompanyUserIds = async (companyId) => {
   return accessRecords.map((access) => access.userId);
 };
 
-const ensureUserBelongsToCompany = async (userId, context = {}) => {
+const getScopedCompanyUserIds = async (context = {}) => {
+  ensureCompanyContext(context);
+
+  /**
+   * COMPANY scope:
+   * all users belonging to the company.
+   */
+  if (context.roleScopeType === "COMPANY") {
+    return getCompanyUserIds(context.companyId);
+  }
+
+  /**
+   * DEPARTMENT scope:
+   * only users whose CompanyAccess belongs to the
+   * authenticated user's department.
+   */
+  if (context.roleScopeType === "DEPARTMENT") {
+    if (!context.departmentId) {
+      throw new ApiError(403, "Active department context is required.");
+    }
+
+    const accessRecords = await CompanyAccess.find({
+      companyId: context.companyId,
+      departmentId: context.departmentId,
+      isDeleted: false,
+      status: {
+        $in: ["ONBOARDING", "ACTIVE", "INACTIVE"],
+      },
+    })
+      .select("userId")
+      .lean();
+
+    return accessRecords.map((access) => access.userId);
+  }
+
+  /**
+   * TEAM scope:
+   * only users belonging to teams managed by
+   * the authenticated Team Lead.
+   */
+  if (context.roleScopeType === "TEAM") {
+    if (!context.companyAccessId) {
+      throw new ApiError(403, "Active company access context is required.");
+    }
+
+    const teams = await Team.find({
+      companyId: context.companyId,
+      teamLeadIds: context.companyAccessId,
+      isDeleted: false,
+    })
+      .select("_id")
+      .lean();
+
+    const teamIds = teams.map((team) => team._id);
+
+    const accessRecords = await CompanyAccess.find({
+      companyId: context.companyId,
+      teamId: {
+        $in: teamIds,
+      },
+      isDeleted: false,
+      status: {
+        $in: ["ONBOARDING", "ACTIVE", "INACTIVE"],
+      },
+    })
+      .select("userId")
+      .lean();
+
+    return accessRecords.map((access) => access.userId);
+  }
+
+  throw new ApiError(403, "Unsupported role scope for company user access.");
+};
+
+const ensureUserWithinScope = async (userId, context = {}) => {
   if (isPlatformScope(context)) {
     return;
   }
 
-  ensureCompanyContext(context);
+  const allowedUserIds = await getScopedCompanyUserIds(context);
 
-  const companyAccess = await CompanyAccess.findOne({
-    userId,
-    companyId: context.companyId,
-    isDeleted: false,
-  })
-    .select("_id")
-    .lean();
+  const hasAccess = allowedUserIds.some(
+    (allowedUserId) => allowedUserId.toString() === userId.toString(),
+  );
 
-  if (!companyAccess) {
-    /*
-     * Return 404 rather than 403 so users cannot discover
-     * records belonging to another company.
-     */
+  if (!hasAccess) {
     throw new ApiError(404, "User not found.");
   }
 };
@@ -202,9 +269,7 @@ export const listUsers = async (
   };
 
   if (!isPlatformScope(context)) {
-    ensureCompanyContext(context);
-
-    const companyUserIds = await getCompanyUserIds(context.companyId);
+    const companyUserIds = await getScopedCompanyUserIds(context);
 
     filter._id = {
       $in: companyUserIds,
@@ -278,8 +343,7 @@ export const listUsers = async (
  * Get one user by ID.
  */
 export const getUserById = async (userId, context = {}) => {
-  await ensureUserBelongsToCompany(userId, context);
-
+  await ensureUserWithinScope(userId, context);
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,
@@ -301,8 +365,7 @@ export const getUserById = async (userId, context = {}) => {
  * Update user profile and account details.
  */
 export const updateUser = async (userId, updateData, context = {}) => {
-  await ensureUserBelongsToCompany(userId, context);
-
+  await ensureUserWithinScope(userId, context);
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({
@@ -378,8 +441,7 @@ export const updateUser = async (userId, updateData, context = {}) => {
  * Activate, deactivate or suspend a user.
  */
 export const updateUserStatus = async (userId, status, context = {}) => {
-  await ensureUserBelongsToCompany(userId, context);
-
+  await ensureUserWithinScope(userId, context);
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({
@@ -446,8 +508,7 @@ export const changePassword = async (
  * This does not require the current password.
  */
 export const resetPassword = async (userId, newPassword, context = {}) => {
-  await ensureUserBelongsToCompany(userId, context);
-
+  await ensureUserWithinScope(userId, context);
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({
@@ -480,8 +541,7 @@ export const resetPassword = async (userId, newPassword, context = {}) => {
  * Soft-delete a user.
  */
 export const softDeleteUser = async (userId, context = {}) => {
-  await ensureUserBelongsToCompany(userId, context);
-
+  await ensureUserWithinScope(userId, context);
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const roleScopeTypeSchema = z.enum(["COMPANY", "DEPARTMENT", "TEAM"]);
+
 const objectIdSchema = z
   .string()
   .regex(/^[a-f\d]{24}$/i, "Invalid MongoDB ObjectId.");
@@ -48,6 +50,8 @@ export const createRoleSchema = z.object({
 
       permissionIds: permissionIdsSchema.default([]),
 
+      scopeType: roleScopeTypeSchema.default("COMPANY"),
+
       status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
     })
     .strict(),
@@ -74,6 +78,8 @@ export const updateRoleSchema = z.object({
       description: optionalText(500),
 
       permissionIds: permissionIdsSchema.optional(),
+
+      // scopeType: roleScopeTypeSchema.optional(),
 
       status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
     })
@@ -184,8 +190,7 @@ export const listRolesSchema = z.object({
 
       status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
 
-      scopeType: z.literal("COMPANY").optional(),
-
+      scopeType: roleScopeTypeSchema.optional(),
       isSystemRole: z
         .enum(["true", "false"])
         .transform((value) => value === "true")

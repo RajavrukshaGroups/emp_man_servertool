@@ -5,6 +5,7 @@ const DEFAULT_COMPANY_ROLES = [
   {
     name: "Company Administrator",
     code: "COMPANY_ADMIN",
+    scopeType: "COMPANY",
     description:
       "Company administrator with full access to company-level employee management operations.",
     permissionCodes: [
@@ -80,14 +81,13 @@ const DEFAULT_COMPANY_ROLES = [
   {
     name: "Team Lead",
     code: "TEAM_LEAD",
+    scopeType: "TEAM",
     description:
       "Team lead responsible for team operations, task supervision and employee coordination.",
     permissionCodes: [
       "dashboard.read",
 
       "employee.read",
-
-      "department.read",
 
       "team.read",
 
@@ -115,6 +115,7 @@ const DEFAULT_COMPANY_ROLES = [
   {
     name: "Employee",
     code: "EMPLOYEE",
+    scopeType: "COMPANY",
     description:
       "Standard employee role with self-service and assigned-work access.",
     permissionCodes: [
@@ -170,7 +171,6 @@ export const provisionDefaultCompanyRoles = async ({
       {
         companyId,
         code: roleDefinition.code,
-        scopeType: "COMPANY",
         isDeleted: false,
       },
       {
@@ -185,7 +185,7 @@ export const provisionDefaultCompanyRoles = async ({
 
           permissionIds,
 
-          scopeType: "COMPANY",
+          scopeType: roleDefinition.scopeType,
 
           isSystemRole: true,
 
