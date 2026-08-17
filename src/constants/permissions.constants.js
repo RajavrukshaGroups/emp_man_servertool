@@ -17,7 +17,7 @@ export const PERMISSION_MODULES = Object.freeze({
 
 export const PERMISSIONS = Object.freeze({
   DASHBOARD_READ: "dashboard.read",
-  
+
   COMPANY_CREATE: "company.create",
   COMPANY_READ: "company.read",
   COMPANY_UPDATE: "company.update",
@@ -57,11 +57,10 @@ export const PERMISSIONS = Object.freeze({
   TASK_ASSIGN: "task.assign",
   TASK_UPDATE: "task.update",
   TASK_SUBMIT: "task.submit",
-  TASK_REVIEW: "task.review",
-  TASK_APPROVE: "task.approve",
-  TASK_REWORK: "task.rework",
+  TASK_COMPLETE: "task.complete",
+  TASK_REOPEN: "task.reopen",
   TASK_CANCEL: "task.cancel",
-
+  
   LEAVE_APPLY: "leave.apply",
   LEAVE_READ: "leave.read",
   LEAVE_RECOMMEND: "leave.recommend",

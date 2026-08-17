@@ -40,14 +40,16 @@ const DEFAULT_COMPANY_ROLES = [
       "team.assign_member",
       "team.assign_lead",
 
+      /**
+       * Jira-style Task Management
+       */
       "task.create",
       "task.read",
       "task.assign",
       "task.update",
       "task.submit",
-      "task.review",
-      "task.approve",
-      "task.rework",
+      "task.complete",
+      "task.reopen",
       "task.cancel",
 
       "leave.apply",
@@ -91,13 +93,17 @@ const DEFAULT_COMPANY_ROLES = [
 
       "team.read",
 
+      /**
+       * Jira-style Task Management
+       */
       "task.create",
       "task.read",
       "task.assign",
       "task.update",
-      "task.review",
-      "task.approve",
-      "task.rework",
+      "task.submit",
+      "task.complete",
+      "task.reopen",
+      "task.cancel",
 
       "leave.apply",
       "leave.read",
@@ -115,12 +121,31 @@ const DEFAULT_COMPANY_ROLES = [
   {
     name: "Employee",
     code: "EMPLOYEE",
-    scopeType: "COMPANY",
+
+    /**
+     * IMPORTANT:
+     *
+     * Keep Employee TEAM scoped.
+     *
+     * The service determines:
+     *
+     * TEAM scope + managed teams = Team Lead
+     * TEAM scope + no managed teams = Employee/self scope
+     */
+    scopeType: "TEAM",
+
     description:
       "Standard employee role with self-service and assigned-work access.",
+
     permissionCodes: [
       "dashboard.read",
 
+      /**
+       * Employee can only work on own assigned tickets.
+       *
+       * Record-level restrictions are enforced
+       * inside task.service.js.
+       */
       "task.read",
       "task.update",
       "task.submit",
