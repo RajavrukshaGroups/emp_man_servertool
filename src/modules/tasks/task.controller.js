@@ -9,13 +9,13 @@ import {
   getTaskActivities as getTaskActivitiesService,
   getTaskById as getTaskByIdService,
   listTasks as listTasksService,
+  reassignTask as reassignTaskService,
   reopenTask as reopenTaskService,
   startTask as startTaskService,
   submitTask as submitTaskService,
   updateTask as updateTaskService,
   updateTaskProgress as updateTaskProgressService,
 } from "./task.service.js";
-
 /**
  * Create task.
  */
@@ -75,6 +75,30 @@ export const updateTask = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, task, "Task updated successfully."));
+});
+
+/**
+ * Reassign task to another employee.
+ *
+ * Allowed workflow states:
+ *
+ * ASSIGNED
+ * IN_PROGRESS
+ * REOPENED
+ *
+ * Current progress and workflow state are preserved.
+ */
+export const reassignTask = asyncHandler(async (req, res) => {
+  const task = await reassignTaskService({
+    companyId: req.validated.params.companyId,
+    taskId: req.validated.params.taskId,
+    payload: req.validated.body,
+    requesterUserId: req.user.userId,
+  });
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, task, "Task reassigned successfully."));
 });
 
 /**

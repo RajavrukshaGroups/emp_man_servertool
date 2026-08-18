@@ -14,6 +14,7 @@ import {
   deleteTask,
   getTaskById,
   listTasks,
+  reassignTask,
   reopenTask,
   startTask,
   submitTask,
@@ -29,6 +30,7 @@ import {
   deleteTaskSchema,
   getTaskByIdSchema,
   listTasksSchema,
+  reassignTaskSchema,
   reopenTaskSchema,
   startTaskSchema,
   submitTaskSchema,
@@ -82,6 +84,24 @@ router.patch(
   authorize(PERMISSIONS.TASK_UPDATE),
   validate(updateTaskSchema),
   updateTask,
+);
+
+/**
+ * Reassign task to another employee.
+ *
+ * Allowed states:
+ *
+ * ASSIGNED
+ * IN_PROGRESS
+ * REOPENED
+ *
+ * Progress and current workflow state are preserved.
+ */
+router.patch(
+  "/:taskId/reassign",
+  authorize(PERMISSIONS.TASK_REASSIGN),
+  validate(reassignTaskSchema),
+  reassignTask,
 );
 
 /**

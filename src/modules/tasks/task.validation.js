@@ -48,18 +48,14 @@ export const createTaskSchema = z.object({
         .string()
         .trim()
         .min(3, "Task title must contain at least 3 characters.")
-        .max(200, "Task title cannot exceed 200 characters."),
+        .max(200, "Task title cannot exceed 200 characters.")
+        .optional(),
 
-      description: optionalText(5000, "Task description").default(""),
+      description: optionalText(5000, "Task description"),
 
-      priority: taskPrioritySchema.default("MEDIUM"),
+      priority: taskPrioritySchema.optional(),
 
-      /**
-       * CompanyAccess ID.
-       */
-      assigneeId: objectIdSchema,
-
-      dueDate: z.coerce.date(),
+      dueDate: z.coerce.date().optional(),
     })
     .strict(),
 
@@ -102,6 +98,41 @@ export const updateTaskSchema = z.object({
     .refine((body) => Object.keys(body).length > 0, {
       message: "At least one field is required for update.",
     }),
+
+  params: taskParamsSchema,
+
+  query: z.object({}).strict().optional(),
+});
+
+/**
+ * ============================================================
+ * REASSIGN TASK
+ *
+ * PATCH /companies/:companyId/tasks/:taskId/reassign
+ *
+ * Transfers the current ticket ownership to another employee.
+ *
+ * The service layer will enforce:
+ *
+ * - ASSIGNED, IN_PROGRESS and REOPENED only
+ * - new assignee must belong to the same company
+ * - Team Lead can reassign only within managed teams
+ * - current ticket team must remain unchanged for now
+ * - progress and work history must be preserved
+ * ============================================================
+ */
+export const reassignTaskSchema = z.object({
+  body: z
+    .object({
+      newAssigneeId: objectIdSchema,
+
+      reassignmentReason: z
+        .string()
+        .trim()
+        .min(1, "Reassignment reason is required.")
+        .max(3000, "Reassignment reason cannot exceed 3000 characters."),
+    })
+    .strict(),
 
   params: taskParamsSchema,
 

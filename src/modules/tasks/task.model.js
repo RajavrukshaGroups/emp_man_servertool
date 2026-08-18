@@ -16,6 +16,7 @@ const TASK_STATUSES = [
  * Detailed activity history is stored separately
  * inside TaskActivity.
  */
+
 const taskStatusHistorySchema = new mongoose.Schema(
   {
     fromStatus: {
@@ -44,6 +45,52 @@ const taskStatusHistorySchema = new mongoose.Schema(
     },
 
     changedAt: {
+      type: Date,
+      default: Date.now,
+      required: true,
+    },
+  },
+  {
+    _id: true,
+    versionKey: false,
+  },
+);
+
+const taskReassignmentHistorySchema = new mongoose.Schema(
+  {
+    fromAssigneeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CompanyAccess",
+      required: [true, "Previous assignee is required."],
+    },
+
+    toAssigneeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CompanyAccess",
+      required: [true, "New assignee is required."],
+    },
+
+    reassignedById: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CompanyAccess",
+      required: [true, "Reassigned by is required."],
+    },
+
+    reason: {
+      type: String,
+      trim: true,
+      required: [true, "Reassignment reason is required."],
+      maxlength: [3000, "Reassignment reason cannot exceed 3000 characters."],
+    },
+
+    progressAtReassignment: {
+      type: Number,
+      min: [0, "Progress cannot be below 0."],
+      max: [100, "Progress cannot exceed 100."],
+      required: true,
+    },
+
+    reassignedAt: {
       type: Date,
       default: Date.now,
       required: true,
@@ -111,10 +158,6 @@ const taskSchema = new mongoose.Schema(
       index: true,
     },
 
-    /**
-     * CompanyAccess of the person who originally
-     * assigned/created the task.
-     */
     assignedById: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "CompanyAccess",
@@ -122,6 +165,10 @@ const taskSchema = new mongoose.Schema(
       index: true,
     },
 
+    reassignmentHistory: {
+      type: [taskReassignmentHistorySchema],
+      default: [],
+    },
     /**
      * Actual first time the assignee started working.
      *
@@ -387,6 +434,18 @@ taskSchema.index({
   companyId: 1,
   assigneeId: 1,
   reopenCount: -1,
+});
+
+/**
+ * Reassignment reporting.
+ *
+ * Useful for finding tickets that were transferred
+ * to a particular employee.
+ */
+taskSchema.index({
+  companyId: 1,
+  "reassignmentHistory.toAssigneeId": 1,
+  isDeleted: 1,
 });
 
 /**

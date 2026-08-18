@@ -64,6 +64,35 @@ const TASK_POPULATE = [
       },
     ],
   },
+
+  {
+    path: "reassignmentHistory.fromAssigneeId",
+    select: "userId employeeCode designation departmentId teamId status",
+    populate: {
+      path: "userId",
+      select:
+        "firstName middleName lastName displayName email mobile profilePhoto status",
+    },
+  },
+  {
+    path: "reassignmentHistory.toAssigneeId",
+    select: "userId employeeCode designation departmentId teamId status",
+    populate: {
+      path: "userId",
+      select:
+        "firstName middleName lastName displayName email mobile profilePhoto status",
+    },
+  },
+  {
+    path: "reassignmentHistory.reassignedById",
+    select: "userId employeeCode designation departmentId teamId status",
+    populate: {
+      path: "userId",
+      select:
+        "firstName middleName lastName displayName email mobile profilePhoto status",
+    },
+  },
+
   {
     path: "submittedById",
     select: "userId employeeCode designation departmentId teamId status",
@@ -999,97 +1028,6 @@ export const updateTask = async ({
     task.dueDate = payload.dueDate;
   }
 
-  if (
-    payload.assigneeId !== undefined &&
-    payload.assigneeId.toString() !== task.assigneeId.toString()
-  ) {
-    if (!["ASSIGNED", "IN_PROGRESS", "REOPENED"].includes(task.status)) {
-      throw new ApiError(
-        400,
-        "Task cannot be reassigned in its current status.",
-      );
-    }
-
-    const newAssignee = await getValidAssignee({
-      companyId,
-
-      assigneeId: payload.assigneeId,
-    });
-
-    ensureAssigneeWithinRequesterScope({
-      assignee: newAssignee,
-
-      requesterContext,
-    });
-
-    const previousAssigneeId = task.assigneeId;
-
-    const previousTeamId = task.teamId;
-
-    const previousDepartmentId = task.departmentId;
-
-    const previousStatus = task.status;
-
-    task.assigneeId = newAssignee._id;
-
-    task.departmentId = newAssignee.departmentId;
-
-    task.teamId = newAssignee.teamId;
-
-    /**
-     * Reassignment resets active work state.
-     */
-    task.status = "ASSIGNED";
-
-    task.startDate = null;
-
-    task.progressPercentage = 0;
-
-    task.workNote = "";
-
-    task.submittedAt = null;
-
-    task.submittedById = null;
-
-    task.submissionNote = "";
-
-    task.statusHistory.push({
-      fromStatus: previousStatus,
-
-      toStatus: "ASSIGNED",
-
-      changedById: requesterContext.access._id,
-
-      note: "Task reassigned.",
-
-      changedAt: new Date(),
-    });
-
-    activities.push({
-      activityType: "REASSIGNED",
-
-      fromStatus: previousStatus,
-
-      toStatus: "ASSIGNED",
-
-      note: "Task reassigned to another employee.",
-
-      metadata: {
-        previousAssigneeId,
-
-        newAssigneeId: newAssignee._id,
-
-        previousTeamId,
-
-        newTeamId: newAssignee.teamId,
-
-        previousDepartmentId,
-
-        newDepartmentId: newAssignee.departmentId,
-      },
-    });
-  }
-
   /**
    * Due date cannot already be before the actual start date.
    */
@@ -1120,6 +1058,197 @@ export const updateTask = async ({
       metadata: activity.metadata ?? {},
     });
   }
+
+  return getPopulatedTask(task._id);
+};
+
+/**
+ * ============================================================
+ * REASSIGN TASK
+ *
+ * Transfers current ownership of an active ticket
+ * to another employee.
+ *
+ * Allowed:
+ *
+ * ASSIGNED
+ * IN_PROGRESS
+ * REOPENED
+ *
+ * Important:
+ *
+ * - status is preserved
+ * - progress is preserved
+ * - startDate is preserved
+ * - workNote is preserved
+ * - submission/completion/reopen history is preserved
+ * - ticket remains inside the same team
+ * ============================================================
+ */
+
+export const reassignTask = async ({
+  companyId,
+  taskId,
+  payload,
+  requesterUserId,
+}) => {
+  const requesterContext = await getRequesterContext({
+    companyId,
+    requesterUserId,
+  });
+
+  const task = await findTaskOrFail({
+    companyId,
+    taskId,
+  });
+
+  /**
+   * Requester must first be allowed to manage
+   * the existing ticket.
+   */
+  ensureTaskManageable({
+    task,
+    requesterContext,
+  });
+
+  /**
+   * We don't allow ownership changes while the
+   * work is waiting for review or already closed.
+   */
+  if (!["ASSIGNED", "IN_PROGRESS", "REOPENED"].includes(task.status)) {
+    throw new ApiError(
+      400,
+      `Task cannot be reassigned while status is ${task.status}.`,
+    );
+  }
+
+  const currentAssigneeId = task.assigneeId.toString();
+
+  if (payload.newAssigneeId === currentAssigneeId) {
+    throw new ApiError(
+      400,
+      "The selected employee is already assigned to this task.",
+    );
+  }
+
+  /**
+   * Resolve and validate the new employee.
+   */
+  const newAssignee = await getValidAssignee({
+    companyId,
+    assigneeId: payload.newAssigneeId,
+  });
+
+  /**
+   * Requester scope must also allow access to
+   * the destination employee.
+   *
+   * Example:
+   *
+   * Team Lead cannot reassign outside a managed team.
+   */
+  ensureAssigneeWithinRequesterScope({
+    assignee: newAssignee,
+    requesterContext,
+  });
+
+  /**
+   * For the first version, reassignment is intentionally
+   * restricted to the SAME TEAM.
+   *
+   * Cross-team transfer should later be implemented
+   * as a separate workflow because it changes team/
+   * department responsibility.
+   */
+  if (newAssignee.teamId.toString() !== task.teamId.toString()) {
+    throw new ApiError(
+      400,
+      "Task reassignment is currently allowed only within the same team.",
+    );
+  }
+
+  /**
+   * Same-team reassignment should naturally also mean
+   * the department remains unchanged, but verify it
+   * defensively.
+   */
+  if (newAssignee.departmentId.toString() !== task.departmentId.toString()) {
+    throw new ApiError(
+      400,
+      "The new assignee must belong to the task's current department.",
+    );
+  }
+
+  const previousAssigneeId = task.assigneeId;
+
+  const progressAtReassignment = task.progressPercentage;
+
+  const statusAtReassignment = task.status;
+
+  const reassignedAt = new Date();
+
+  /**
+   * Preserve structured reassignment evidence.
+   */
+  task.reassignmentHistory.push({
+    fromAssigneeId: previousAssigneeId,
+
+    toAssigneeId: newAssignee._id,
+
+    reassignedById: requesterContext.access._id,
+
+    reason: payload.reassignmentReason,
+
+    progressAtReassignment,
+
+    reassignedAt,
+  });
+
+  /**
+   * Only current ownership changes.
+   *
+   * DO NOT reset:
+   *
+   * task.status
+   * task.progressPercentage
+   * task.startDate
+   * task.workNote
+   * task.statusHistory
+   * task.submission information
+   * task.reopen information
+   */
+  task.assigneeId = newAssignee._id;
+
+  task.updatedBy = requesterUserId;
+
+  await task.save();
+
+  /**
+   * Detailed Jira-style timeline entry.
+   *
+   * There is no status transition during reassignment,
+   * so fromStatus/toStatus intentionally remain null.
+   */
+  await createTaskActivity({
+    task,
+    requesterContext,
+
+    activityType: "REASSIGNED",
+
+    note: payload.reassignmentReason,
+
+    metadata: {
+      previousAssigneeId,
+
+      newAssigneeId: newAssignee._id,
+
+      progressAtReassignment,
+
+      statusAtReassignment,
+
+      reassignedAt,
+    },
+  });
 
   return getPopulatedTask(task._id);
 };

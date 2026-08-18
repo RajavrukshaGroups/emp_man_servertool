@@ -55,12 +55,13 @@ export const PERMISSIONS = Object.freeze({
   TASK_CREATE: "task.create",
   TASK_READ: "task.read",
   TASK_ASSIGN: "task.assign",
+  TASK_REASSIGN: "task.reassign",
   TASK_UPDATE: "task.update",
   TASK_SUBMIT: "task.submit",
   TASK_COMPLETE: "task.complete",
   TASK_REOPEN: "task.reopen",
   TASK_CANCEL: "task.cancel",
-  
+
   LEAVE_APPLY: "leave.apply",
   LEAVE_READ: "leave.read",
   LEAVE_RECOMMEND: "leave.recommend",
