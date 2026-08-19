@@ -40,6 +40,16 @@ const DEFAULT_COMPANY_ROLES = [
       "team.assign_member",
       "team.assign_lead",
 
+      "client.create",
+      "client.read",
+      "client.update",
+      "client.delete",
+
+      "work_category.create",
+      "work_category.read",
+      "work_category.update",
+      "work_category.delete",
+
       /**
        * Jira-style Task Management
        */
@@ -93,6 +103,9 @@ const DEFAULT_COMPANY_ROLES = [
       "employee.read",
 
       "team.read",
+
+      "client.read",
+      "work_category.read",
 
       /**
        * Jira-style Task Management
@@ -190,9 +203,21 @@ export const provisionDefaultCompanyRoles = async ({
   );
 
   for (const roleDefinition of DEFAULT_COMPANY_ROLES) {
-    const permissionIds = roleDefinition.permissionCodes
-      .map((code) => permissionMap.get(code))
-      .filter(Boolean);
+    const missingPermissionCodes = roleDefinition.permissionCodes.filter(
+      (code) => !permissionMap.has(code),
+    );
+
+    if (missingPermissionCodes.length > 0) {
+      throw new Error(
+        `Missing permission(s) for role ${roleDefinition.code}: ${missingPermissionCodes.join(
+          ", ",
+        )}`,
+      );
+    }
+
+    const permissionIds = roleDefinition.permissionCodes.map((code) =>
+      permissionMap.get(code),
+    );
 
     await Role.findOneAndUpdate(
       {
@@ -203,37 +228,24 @@ export const provisionDefaultCompanyRoles = async ({
       {
         $set: {
           companyId,
-
           name: roleDefinition.name,
-
           code: roleDefinition.code,
-
           description: roleDefinition.description,
-
           permissionIds,
-
           scopeType: roleDefinition.scopeType,
-
           isSystemRole: true,
-
           isEditable: false,
-
           status: "ACTIVE",
-
           updatedBy: actorId,
         },
-
         $setOnInsert: {
           createdBy: actorId,
         },
       },
       {
         upsert: true,
-
         new: true,
-
         runValidators: true,
-
         session,
       },
     );

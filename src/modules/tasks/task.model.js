@@ -111,6 +111,26 @@ const taskSchema = new mongoose.Schema(
       index: true,
     },
 
+    /**
+     * Client for whom this work is being performed.
+     *
+     * Includes both:
+     * - EXTERNAL clients
+     * - IN_HOUSE clients
+     *
+     * The service layer must verify that the client:
+     * - belongs to this company
+     * - is active
+     * - is not deleted
+     */
+
+    clientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Client",
+      required: [true, "Client is required."],
+      index: true,
+    },
+
     departmentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Department",
@@ -122,6 +142,31 @@ const taskSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Team",
       required: [true, "Team is required."],
+      index: true,
+    },
+
+    /**
+     * Category/type of work being performed.
+     *
+     * Examples:
+     * - Creative
+     * - Reel
+     * - Banner
+     * - SEO
+     * - Landing Page
+     * - Bug Fix
+     *
+     * The service layer must verify that the category belongs to:
+     *
+     * companyId
+     * departmentId
+     * teamId
+     */
+
+    workCategoryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "WorkCategory",
+      required: [true, "Work category is required."],
       index: true,
     },
 
@@ -140,6 +185,36 @@ const taskSchema = new mongoose.Schema(
       maxlength: [5000, "Task description cannot exceed 5000 characters."],
     },
 
+    /**
+     * Number of work units represented by this task.
+     *
+     * The meaning comes from WorkCategory.unitLabel.
+     *
+     * Examples:
+     *
+     * Category: Creative
+     * unitLabel: creative
+     * quantity: 5
+     *
+     * => 5 creatives
+     *
+     * Category: Reel
+     * unitLabel: reel
+     * quantity: 3
+     *
+     * => 3 reels
+     */
+    quantity: {
+      type: Number,
+      required: [true, "Task quantity is required."],
+      min: [1, "Task quantity must be at least 1."],
+      default: 1,
+
+      validate: {
+        validator: Number.isInteger,
+        message: "Task quantity must be a whole number.",
+      },
+    },
     priority: {
       type: String,
       enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
@@ -446,6 +521,85 @@ taskSchema.index({
   companyId: 1,
   "reassignmentHistory.toAssigneeId": 1,
   isDeleted: 1,
+});
+
+/**
+ * ============================================================
+ * CLIENT TASK REPORTING
+ * ============================================================
+ *
+ * Useful for:
+ * - client-wise task listing
+ * - client status reporting
+ * - monthly client reports
+ */
+taskSchema.index({
+  companyId: 1,
+  clientId: 1,
+  status: 1,
+  isDeleted: 1,
+});
+
+/**
+ * ============================================================
+ * CLIENT + WORK CATEGORY REPORTING
+ * ============================================================
+ *
+ * Example:
+ *
+ * Mercury Academy
+ *   → Creative
+ *   → Reel
+ *   → Landing Page
+ *
+ * This becomes especially useful when calculating
+ * completed quantities for a client.
+ */
+taskSchema.index({
+  companyId: 1,
+  clientId: 1,
+  workCategoryId: 1,
+  status: 1,
+  isDeleted: 1,
+});
+
+/**
+ * ============================================================
+ * TEAM + WORK CATEGORY REPORTING
+ * ============================================================
+ *
+ * Useful for understanding which categories of work
+ * are being handled by a particular team.
+ */
+taskSchema.index({
+  companyId: 1,
+  departmentId: 1,
+  teamId: 1,
+  workCategoryId: 1,
+  status: 1,
+  isDeleted: 1,
+});
+
+/**
+ * ============================================================
+ * EMPLOYEE + WORK CATEGORY REPORTING
+ * ============================================================
+ *
+ * Useful for reporting work handled by an employee
+ * across categories.
+ *
+ * Example:
+ *
+ * Rahul
+ *   → Creative
+ *   → Reel
+ *   → Banner
+ */
+taskSchema.index({
+  companyId: 1,
+  assigneeId: 1,
+  workCategoryId: 1,
+  completedAt: -1,
 });
 
 /**

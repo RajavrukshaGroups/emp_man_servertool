@@ -3,9 +3,10 @@ import TaskActivity from "./taskactivity.model.js";
 
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Team from "../teams/team.model.js";
+import Client from "../clients/client.model.js";
+import WorkCategory from "../work-categories/workCategory.model.js";
 
 import { ApiError } from "../../utils/ApiError.js";
-
 /**
  * ============================================================
  * POPULATION
@@ -18,12 +19,22 @@ const TASK_POPULATE = [
     select: "name legalName code slug logo status",
   },
   {
+    path: "clientId",
+    select:
+      "name code clientType engagementType contactPerson email mobile website industry status",
+  },
+  {
     path: "departmentId",
     select: "name code description status",
   },
   {
     path: "teamId",
     select: "name code description status",
+  },
+  {
+    path: "workCategoryId",
+    select:
+      "name code description unitLabel workloadWeight departmentId teamId status",
   },
   {
     path: "assigneeId",
@@ -291,6 +302,73 @@ const getValidAssignee = async ({ companyId, assigneeId }) => {
   }
 
   return assignee;
+};
+
+/**
+ * ============================================================
+ * CLIENT VALIDATION
+ * ============================================================
+ */
+
+const getValidClient = async ({ companyId, clientId }) => {
+  const client = await Client.findOne({
+    _id: clientId,
+    companyId,
+    status: "ACTIVE",
+    isDeleted: false,
+  })
+    .select("_id companyId name code clientType engagementType status")
+    .lean();
+
+  if (!client) {
+    throw new ApiError(
+      400,
+      "Selected client is unavailable, inactive or does not belong to this company.",
+    );
+  }
+
+  return client;
+};
+
+/**
+ * ============================================================
+ * WORK CATEGORY VALIDATION
+ * ============================================================
+ *
+ * Category must belong to the same:
+ *
+ * company
+ * department
+ * team
+ */
+
+const getValidWorkCategory = async ({
+  companyId,
+  departmentId,
+  teamId,
+  workCategoryId,
+}) => {
+  const workCategory = await WorkCategory.findOne({
+    _id: workCategoryId,
+    companyId,
+    departmentId,
+    teamId,
+    status: "ACTIVE",
+    isDeleted: false,
+  })
+    .select(
+      "_id companyId departmentId teamId name code unitLabel workloadWeight status",
+    )
+    .lean();
+
+  if (!workCategory) {
+    throw new ApiError(
+      400,
+      "Selected work category is unavailable, inactive or does not belong to the task's department and team.",
+    );
+  }
+
+  return workCategory;
 };
 
 /**
@@ -589,14 +667,53 @@ export const createTask = async ({ companyId, payload, requesterUserId }) => {
     requesterUserId,
   });
 
+  /**
+   * Validate assignee.
+   */
   const assignee = await getValidAssignee({
     companyId,
     assigneeId: payload.assigneeId,
   });
 
+  /**
+   * Requester must be permitted to assign work
+   * to this employee.
+   */
   ensureAssigneeWithinRequesterScope({
     assignee,
     requesterContext,
+  });
+
+  /**
+   * Validate client.
+   */
+  const client = await getValidClient({
+    companyId,
+    clientId: payload.clientId,
+  });
+
+  /**
+   * Department/team are derived from the assignee.
+   *
+   * This prevents the frontend from manually supplying
+   * a department/team that does not match the employee.
+   */
+  const departmentId = assignee.departmentId;
+
+  const teamId = assignee.teamId;
+
+  /**
+   * Validate selected work category against
+   * the assignee's department/team.
+   */
+  const workCategory = await getValidWorkCategory({
+    companyId,
+
+    departmentId,
+
+    teamId,
+
+    workCategoryId: payload.workCategoryId,
   });
 
   const now = new Date();
@@ -604,13 +721,19 @@ export const createTask = async ({ companyId, payload, requesterUserId }) => {
   const task = await Task.create({
     companyId,
 
-    departmentId: assignee.departmentId,
+    clientId: client._id,
 
-    teamId: assignee.teamId,
+    departmentId,
+
+    teamId,
+
+    workCategoryId: workCategory._id,
 
     title: payload.title,
 
     description: payload.description ?? "",
+
+    quantity: payload.quantity ?? 1,
 
     priority: payload.priority ?? "MEDIUM",
 
@@ -618,9 +741,6 @@ export const createTask = async ({ companyId, payload, requesterUserId }) => {
 
     assignedById: requesterContext.access._id,
 
-    /**
-     * Actual work has not started yet.
-     */
     startDate: null,
 
     dueDate: payload.dueDate,
@@ -664,6 +784,12 @@ export const createTask = async ({ companyId, payload, requesterUserId }) => {
 
     metadata: {
       assigneeId: assignee._id,
+
+      clientId: client._id,
+
+      workCategoryId: workCategory._id,
+
+      quantity: task.quantity,
     },
   });
 
@@ -688,8 +814,10 @@ export const listTasks = async ({ companyId, query, requesterUserId }) => {
     search,
     status,
     priority,
+    clientId,
     departmentId,
     teamId,
+    workCategoryId,
     assigneeId,
     assignedById,
     dueDateFrom,
@@ -739,6 +867,10 @@ export const listTasks = async ({ companyId, query, requesterUserId }) => {
     filter.priority = priority;
   }
 
+  if (clientId) {
+    filter.clientId = clientId;
+  }
+
   if (departmentId) {
     filter.departmentId = departmentId;
   }
@@ -756,6 +888,10 @@ export const listTasks = async ({ companyId, query, requesterUserId }) => {
     }
 
     filter.teamId = teamId;
+  }
+
+  if (workCategoryId) {
+    filter.workCategoryId = workCategoryId;
   }
 
   if (assigneeId) {
@@ -934,6 +1070,12 @@ export const getTaskActivities = async ({
  * ============================================================
  */
 
+/**
+ * ============================================================
+ * UPDATE METADATA
+ * ============================================================
+ */
+
 export const updateTask = async ({
   companyId,
   taskId,
@@ -955,6 +1097,10 @@ export const updateTask = async ({
     requesterContext,
   });
 
+  /**
+   * Completed / cancelled tickets should not have
+   * their metadata changed directly.
+   */
   if (["COMPLETED", "CANCELLED"].includes(task.status)) {
     throw new ApiError(
       400,
@@ -962,75 +1108,216 @@ export const updateTask = async ({
     );
   }
 
+  /**
+   * Collect Jira-style activity records for all
+   * metadata changes made during this request.
+   */
   const activities = [];
 
+  /**
+   * ==========================================================
+   * CLIENT CHANGE
+   * ==========================================================
+   */
+
+  if (
+    payload.clientId !== undefined &&
+    payload.clientId !== task.clientId?.toString()
+  ) {
+    const client = await getValidClient({
+      companyId,
+      clientId: payload.clientId,
+    });
+
+    const previousClientId = task.clientId;
+
+    task.clientId = client._id;
+
+    activities.push({
+      activityType: "UPDATED",
+
+      note: "Task client changed.",
+
+      metadata: {
+        previousClientId,
+
+        newClientId: client._id,
+      },
+    });
+  }
+
+  /**
+   * ==========================================================
+   * WORK CATEGORY CHANGE
+   * ==========================================================
+   *
+   * The category must remain compatible with the
+   * task's existing department and team.
+   */
+
+  if (
+    payload.workCategoryId !== undefined &&
+    payload.workCategoryId !== task.workCategoryId?.toString()
+  ) {
+    const workCategory = await getValidWorkCategory({
+      companyId,
+
+      departmentId: task.departmentId,
+
+      teamId: task.teamId,
+
+      workCategoryId: payload.workCategoryId,
+    });
+
+    const previousWorkCategoryId = task.workCategoryId;
+
+    task.workCategoryId = workCategory._id;
+
+    activities.push({
+      activityType: "UPDATED",
+
+      note: "Task work category changed.",
+
+      metadata: {
+        previousWorkCategoryId,
+
+        newWorkCategoryId: workCategory._id,
+      },
+    });
+  }
+
+  /**
+   * ==========================================================
+   * QUANTITY CHANGE
+   * ==========================================================
+   */
+
+  if (payload.quantity !== undefined && payload.quantity !== task.quantity) {
+    const previousQuantity = task.quantity;
+
+    task.quantity = payload.quantity;
+
+    activities.push({
+      activityType: "UPDATED",
+
+      note: "Task quantity changed.",
+
+      metadata: {
+        previousQuantity,
+
+        newQuantity: payload.quantity,
+      },
+    });
+  }
+
+  /**
+   * ==========================================================
+   * TITLE CHANGE
+   * ==========================================================
+   */
+
   if (payload.title !== undefined && payload.title !== task.title) {
+    const previousTitle = task.title;
+
+    task.title = payload.title;
+
     activities.push({
       activityType: "UPDATED",
 
       note: "Task title updated.",
 
       metadata: {
-        previousTitle: task.title,
+        previousTitle,
 
         newTitle: payload.title,
       },
     });
-
-    task.title = payload.title;
   }
+
+  /**
+   * ==========================================================
+   * DESCRIPTION CHANGE
+   * ==========================================================
+   */
 
   if (
     payload.description !== undefined &&
     payload.description !== task.description
   ) {
+    const previousDescription = task.description;
+
+    task.description = payload.description;
+
     activities.push({
       activityType: "UPDATED",
 
       note: "Task description updated.",
-    });
 
-    task.description = payload.description;
+      metadata: {
+        previousDescription,
+
+        newDescription: payload.description,
+      },
+    });
   }
 
+  /**
+   * ==========================================================
+   * PRIORITY CHANGE
+   * ==========================================================
+   */
+
   if (payload.priority !== undefined && payload.priority !== task.priority) {
+    const previousPriority = task.priority;
+
+    task.priority = payload.priority;
+
     activities.push({
       activityType: "PRIORITY_CHANGED",
 
       note: "Task priority changed.",
 
       metadata: {
-        previousPriority: task.priority,
+        previousPriority,
 
         newPriority: payload.priority,
       },
     });
-
-    task.priority = payload.priority;
   }
+
+  /**
+   * ==========================================================
+   * DUE DATE CHANGE
+   * ==========================================================
+   */
 
   if (
     payload.dueDate !== undefined &&
     new Date(payload.dueDate).getTime() !== new Date(task.dueDate).getTime()
   ) {
+    const previousDueDate = task.dueDate;
+
+    task.dueDate = payload.dueDate;
+
     activities.push({
       activityType: "DUE_DATE_CHANGED",
 
       note: "Task due date changed.",
 
       metadata: {
-        previousDueDate: task.dueDate,
+        previousDueDate,
 
         newDueDate: payload.dueDate,
       },
     });
-
-    task.dueDate = payload.dueDate;
   }
 
   /**
-   * Due date cannot already be before the actual start date.
+   * ==========================================================
+   * DATE CONSISTENCY
+   * ==========================================================
    */
+
   if (task.startDate && task.dueDate && task.dueDate < task.startDate) {
     throw new ApiError(
       400,
@@ -1038,9 +1325,29 @@ export const updateTask = async ({
     );
   }
 
+  /**
+   * ==========================================================
+   * NOTHING ACTUALLY CHANGED
+   * ==========================================================
+   *
+   * Zod ensures at least one field is supplied,
+   * but the supplied value might still be identical
+   * to the existing value.
+   */
+
+  if (activities.length === 0) {
+    throw new ApiError(400, "No task changes were detected.");
+  }
+
   task.updatedBy = requesterUserId;
 
   await task.save();
+
+  /**
+   * ==========================================================
+   * ACTIVITY TIMELINE
+   * ==========================================================
+   */
 
   for (const activity of activities) {
     await createTaskActivity({
@@ -1049,9 +1356,9 @@ export const updateTask = async ({
 
       activityType: activity.activityType,
 
-      fromStatus: activity.fromStatus ?? null,
+      fromStatus: null,
 
-      toStatus: activity.toStatus ?? null,
+      toStatus: null,
 
       note: activity.note ?? "",
 

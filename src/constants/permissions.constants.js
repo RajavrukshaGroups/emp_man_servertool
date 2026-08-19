@@ -7,6 +7,10 @@ export const PERMISSION_MODULES = Object.freeze({
   DEPARTMENT: "department",
   TEAM: "team",
   TASK: "task",
+
+  CLIENT: "client",
+  WORK_CATEGORY: "work_category",
+
   LEAVE: "leave",
   ATTENDANCE: "attendance",
   REPORT: "report",
@@ -51,6 +55,16 @@ export const PERMISSIONS = Object.freeze({
   TEAM_DELETE: "team.delete",
   TEAM_ASSIGN_MEMBER: "team.assign_member",
   TEAM_ASSIGN_LEAD: "team.assign_lead",
+
+  CLIENT_CREATE: "client.create",
+  CLIENT_READ: "client.read",
+  CLIENT_UPDATE: "client.update",
+  CLIENT_DELETE: "client.delete",
+
+  WORK_CATEGORY_CREATE: "work_category.create",
+  WORK_CATEGORY_READ: "work_category.read",
+  WORK_CATEGORY_UPDATE: "work_category.update",
+  WORK_CATEGORY_DELETE: "work_category.delete",
 
   TASK_CREATE: "task.create",
   TASK_READ: "task.read",

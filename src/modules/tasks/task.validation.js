@@ -31,6 +31,11 @@ const taskProgressSchema = z.coerce
   .min(0, "Progress percentage cannot be below 0.")
   .max(100, "Progress percentage cannot exceed 100.");
 
+const taskQuantitySchema = z.coerce
+  .number()
+  .int("Task quantity must be a whole number.")
+  .min(1, "Task quantity must be at least 1.");
+
 const taskParamsSchema = z
   .object({
     companyId: objectIdSchema,
@@ -44,18 +49,25 @@ const taskParamsSchema = z
 export const createTaskSchema = z.object({
   body: z
     .object({
+      clientId: objectIdSchema,
+
+      workCategoryId: objectIdSchema,
+
       title: z
         .string()
         .trim()
         .min(3, "Task title must contain at least 3 characters.")
-        .max(200, "Task title cannot exceed 200 characters.")
-        .optional(),
+        .max(200, "Task title cannot exceed 200 characters."),
 
-      description: optionalText(5000, "Task description"),
+      description: optionalText(5000, "Task description").default(""),
 
-      priority: taskPrioritySchema.optional(),
+      quantity: taskQuantitySchema.default(1),
 
-      dueDate: z.coerce.date().optional(),
+      priority: taskPrioritySchema.default("MEDIUM"),
+
+      assigneeId: objectIdSchema,
+
+      dueDate: z.coerce.date(),
     })
     .strict(),
 
@@ -76,6 +88,10 @@ export const createTaskSchema = z.object({
 export const updateTaskSchema = z.object({
   body: z
     .object({
+      clientId: objectIdSchema.optional(),
+
+      workCategoryId: objectIdSchema.optional(),
+
       title: z
         .string()
         .trim()
@@ -85,12 +101,9 @@ export const updateTaskSchema = z.object({
 
       description: optionalText(5000, "Task description"),
 
-      priority: taskPrioritySchema.optional(),
+      quantity: taskQuantitySchema.optional(),
 
-      /**
-       * Reassignment.
-       */
-      assigneeId: objectIdSchema.optional(),
+      priority: taskPrioritySchema.optional(),
 
       dueDate: z.coerce.date().optional(),
     })
@@ -288,9 +301,13 @@ export const listTasksSchema = z.object({
 
       priority: taskPrioritySchema.optional(),
 
+      clientId: objectIdSchema.optional(),
+
       departmentId: objectIdSchema.optional(),
 
       teamId: objectIdSchema.optional(),
+
+      workCategoryId: objectIdSchema.optional(),
 
       assigneeId: objectIdSchema.optional(),
 
@@ -308,6 +325,7 @@ export const listTasksSchema = z.object({
       sortBy: z
         .enum([
           "title",
+          "quantity",
           "priority",
           "status",
           "progressPercentage",
@@ -319,7 +337,6 @@ export const listTasksSchema = z.object({
           "updatedAt",
         ])
         .default("createdAt"),
-
       sortOrder: z.enum(["asc", "desc"]).default("desc"),
     })
     .strict()

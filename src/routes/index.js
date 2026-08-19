@@ -20,6 +20,8 @@ import taskRoutes from "../modules/tasks/task.routes.js";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes.js";
 import onboardingRoutes from "../modules/onboarding/onboarding.route.js";
 import companyAdministratorRoutes from "../modules/company-administrators/companyAdministrator.routes.js";
+import clientRoutes from "../modules/clients/client.routes.js";
+import workCategoryRoutes from "../modules/work-categories/workCategory.routes.js";
 
 import { ApiResponse } from "../utils/ApiResponse.js";
 
@@ -73,6 +75,10 @@ router.use("/companies/:companyId/access", companyAccessRouter);
 router.use("/companies/:companyId/departments", departmentRoutes);
 
 router.use("/companies/:companyId/teams", teamRoutes);
+
+router.use("/companies/:companyId/work-categories", workCategoryRoutes);
+
+router.use("/companies/:companyId/clients", clientRoutes);
 
 router.use("/companies/:companyId/employees", employeeRoutes);
 
