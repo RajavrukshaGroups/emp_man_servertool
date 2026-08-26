@@ -77,10 +77,6 @@ export const updateRoleSchema = z.object({
 
       description: optionalText(500),
 
-      permissionIds: permissionIdsSchema.optional(),
-
-      // scopeType: roleScopeTypeSchema.optional(),
-
       status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
     })
     .strict()

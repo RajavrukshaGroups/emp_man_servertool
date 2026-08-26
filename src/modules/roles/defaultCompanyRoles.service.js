@@ -6,6 +6,9 @@ const DEFAULT_COMPANY_ROLES = [
     name: "Company Administrator",
     code: "COMPANY_ADMIN",
     scopeType: "COMPANY",
+
+    isPermissionEditable: false,
+
     description:
       "Company administrator with full access to company-level employee management operations.",
     permissionCodes: [
@@ -95,6 +98,9 @@ const DEFAULT_COMPANY_ROLES = [
     name: "Team Lead",
     code: "TEAM_LEAD",
     scopeType: "TEAM",
+
+    isPermissionEditable: true,
+
     description:
       "Team lead responsible for team operations, task supervision and employee coordination.",
     permissionCodes: [
@@ -148,6 +154,7 @@ const DEFAULT_COMPANY_ROLES = [
      * TEAM scope + no managed teams = Employee/self scope
      */
     scopeType: "TEAM",
+    isPermissionEditable: true,
 
     description:
       "Standard employee role with self-service and assigned-work access.",
@@ -233,9 +240,15 @@ export const provisionDefaultCompanyRoles = async ({
           description: roleDefinition.description,
           permissionIds,
           scopeType: roleDefinition.scopeType,
+
           isSystemRole: true,
+
           isEditable: false,
+
+          isPermissionEditable: roleDefinition.isPermissionEditable ?? false,
+
           status: "ACTIVE",
+
           updatedBy: actorId,
         },
         $setOnInsert: {

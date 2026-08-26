@@ -139,6 +139,7 @@ export const createRole = async (companyId, roleData, actorId = null) => {
 
     isSystemRole: false,
     isEditable: true,
+    isPermissionEditable: true,
 
     status: roleData.status ?? "ACTIVE",
 
@@ -301,16 +302,17 @@ export const updateRole = async (
     normalizedUpdateData.code = normalizedCode;
   }
 
-  if (updateData.permissionIds !== undefined) {
-    normalizedUpdateData.permissionIds = await validatePermissionIds(
-      updateData.permissionIds,
-    );
-  }
+  // if (updateData.permissionIds !== undefined) {
+  //   normalizedUpdateData.permissionIds = await validatePermissionIds(
+  //     updateData.permissionIds,
+  //   );
+  // }
 
   delete normalizedUpdateData.companyId;
   delete normalizedUpdateData.scopeType;
   delete normalizedUpdateData.isSystemRole;
   delete normalizedUpdateData.isEditable;
+  delete normalizedUpdateData.isPermissionEditable;
   delete normalizedUpdateData.isDeleted;
   delete normalizedUpdateData.deletedAt;
   delete normalizedUpdateData.deletedBy;
@@ -340,7 +342,35 @@ export const updateRole = async (
 };
 
 /**
+ * ============================================================
+ * UPDATE ROLE PERMISSIONS
+ * ============================================================
+ *
  * Replace all permissions assigned to a role.
+ *
+ * Permission editing rules:
+ *
+ * COMPANY_ADMIN
+ *   -> protected
+ *
+ * TEAM_LEAD
+ *   -> permissions editable
+ *
+ * EMPLOYEE
+ *   -> permissions editable
+ *
+ * CUSTOM ROLE
+ *   -> permissions editable
+ *
+ * IMPORTANT:
+ *
+ * Permission access does NOT override record-level scope.
+ *
+ * Example:
+ *
+ * TEAM_LEAD may have employee.read,
+ * but employee.service.js must still restrict the Team Lead
+ * to employees belonging to managed teams.
  */
 export const updateRolePermissions = async (
   companyId,
@@ -354,47 +384,32 @@ export const updateRolePermissions = async (
     _id: roleId,
     companyId,
     isDeleted: false,
-  })
-    .select("_id isEditable")
-    .lean();
+  });
 
   if (!role) {
     throw new ApiError(404, "Role not found.");
   }
 
-  if (!role.isEditable) {
+  if (!role.isPermissionEditable) {
     throw new ApiError(
       403,
-      "Permissions of this protected role cannot be changed.",
+      "Permissions of this role are protected and cannot be changed.",
     );
   }
 
   const validatedPermissionIds = await validatePermissionIds(permissionIds);
 
-  const updatedRole = await Role.findOneAndUpdate(
-    {
-      _id: roleId,
-      companyId,
-      isDeleted: false,
-    },
-    {
-      $set: {
-        permissionIds: validatedPermissionIds,
-        updatedBy: actorId,
-      },
-    },
-    {
-      new: true,
-      runValidators: true,
-    },
-  )
+  role.permissionIds = validatedPermissionIds;
+  role.updatedBy = actorId;
+
+  await role.save();
+
+  return Role.findById(role._id)
     .populate({
       path: "permissionIds",
-      select: "code name module action status",
+      select: "code name module action description status",
     })
     .lean();
-
-  return updatedRole;
 };
 
 /**

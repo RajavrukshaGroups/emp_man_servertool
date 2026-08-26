@@ -57,6 +57,11 @@ const roleSchema = new mongoose.Schema(
       default: true,
     },
 
+    isPermissionEditable: {
+      type: Boolean,
+      default: true,
+    },
+
     status: {
       type: String,
       enum: ["ACTIVE", "INACTIVE"],
@@ -163,6 +168,7 @@ roleSchema.pre("validate", function roleScopeValidation() {
 
   if (this.isSystemRole && this.scopeType === "GLOBAL") {
     this.isEditable = false;
+    this.isPermissionEditable = false;
   }
 });
 
