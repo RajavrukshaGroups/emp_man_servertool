@@ -33,14 +33,32 @@ const router = Router();
 router.use(authenticate);
 
 /**
+ * ============================================================
+ * CREATE USER AUTHORIZATION
+ * ============================================================
+ *
+ * There are two different creation flows:
+ *
+ * 1. Employee onboarding
+ *    -> requires employee.create
+ *
+ * 2. Administrative user creation
+ *    -> requires admin.create
+ */
+const authorizeUserCreation = (req, res, next) => {
+  const isEmployeeOnboarding = req.body?.forEmployeeOnboarding === true;
+
+  if (isEmployeeOnboarding) {
+    return authorize("employee.create")(req, res, next);
+  }
+
+  return authorize("admin.create")(req, res, next);
+};
+
+/**
  * Create user.
  */
-router.post(
-  "/",
-  authorize("admin.create"),
-  validate(createUserSchema),
-  createUser,
-);
+router.post("/", authorizeUserCreation, validate(createUserSchema), createUser);
 
 /**
  * List users.
@@ -80,8 +98,8 @@ router.patch(
 /**
  * Change own password.
  *
- * Do not use admin permission here if normal users should
- * be allowed to change their own password.
+ * Normal users should be allowed to change
+ * their own password.
  */
 router.patch(
   "/:userId/change-password",
