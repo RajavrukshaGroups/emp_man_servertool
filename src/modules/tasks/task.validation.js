@@ -85,6 +85,64 @@ export const createTaskSchema = z.object({
  *
  * Metadata only.
  */
+// export const updateTaskSchema = z.object({
+//   body: z
+//     .object({
+//       clientId: objectIdSchema.optional(),
+
+//       workCategoryId: objectIdSchema.optional(),
+
+//       title: z
+//         .string()
+//         .trim()
+//         .min(3, "Task title must contain at least 3 characters.")
+//         .max(200, "Task title cannot exceed 200 characters.")
+//         .optional(),
+
+//       description: optionalText(5000, "Task description"),
+
+//       quantity: taskQuantitySchema.optional(),
+
+//       priority: taskPrioritySchema.optional(),
+
+//       dueDate: z.coerce.date().optional(),
+//     })
+//     .strict()
+//     .refine((body) => Object.keys(body).length > 0, {
+//       message: "At least one field is required for update.",
+//     }),
+
+//   params: taskParamsSchema,
+
+//   query: z.object({}).strict().optional(),
+// });
+
+/**
+ * PATCH /companies/:companyId/tasks/:taskId
+ *
+ * Small ticket edits only:
+ * - title
+ * - description
+ * - dueDate
+ *
+ * Structural information such as client, work category,
+ * quantity, priority, assignee, team and department
+ * cannot be changed from this endpoint.
+ */
+/**
+ * PATCH /companies/:companyId/tasks/:taskId
+ *
+ * Editable ticket metadata:
+ * - client
+ * - work category
+ * - title
+ * - description
+ * - quantity
+ * - priority
+ * - due date
+ *
+ * Workflow status and reassignment are handled separately.
+ */
 export const updateTaskSchema = z.object({
   body: z
     .object({

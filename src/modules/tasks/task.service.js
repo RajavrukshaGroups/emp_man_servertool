@@ -1076,6 +1076,325 @@ export const getTaskActivities = async ({
  * ============================================================
  */
 
+// export const updateTask = async ({
+//   companyId,
+//   taskId,
+//   payload,
+//   requesterUserId,
+// }) => {
+//   const requesterContext = await getRequesterContext({
+//     companyId,
+//     requesterUserId,
+//   });
+
+//   const task = await findTaskOrFail({
+//     companyId,
+//     taskId,
+//   });
+
+//   ensureTaskManageable({
+//     task,
+//     requesterContext,
+//   });
+
+//   /**
+//    * Completed / cancelled tickets should not have
+//    * their metadata changed directly.
+//    */
+//   if (["COMPLETED", "CANCELLED"].includes(task.status)) {
+//     throw new ApiError(
+//       400,
+//       `Task cannot be edited while status is ${task.status}.`,
+//     );
+//   }
+
+//   /**
+//    * Collect Jira-style activity records for all
+//    * metadata changes made during this request.
+//    */
+//   const activities = [];
+
+//   /**
+//    * ==========================================================
+//    * CLIENT CHANGE
+//    * ==========================================================
+//    */
+
+//   if (
+//     payload.clientId !== undefined &&
+//     payload.clientId !== task.clientId?.toString()
+//   ) {
+//     const client = await getValidClient({
+//       companyId,
+//       clientId: payload.clientId,
+//     });
+
+//     const previousClientId = task.clientId;
+
+//     task.clientId = client._id;
+
+//     activities.push({
+//       activityType: "UPDATED",
+
+//       note: "Task client changed.",
+
+//       metadata: {
+//         previousClientId,
+
+//         newClientId: client._id,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * WORK CATEGORY CHANGE
+//    * ==========================================================
+//    *
+//    * The category must remain compatible with the
+//    * task's existing department and team.
+//    */
+
+//   if (
+//     payload.workCategoryId !== undefined &&
+//     payload.workCategoryId !== task.workCategoryId?.toString()
+//   ) {
+//     const workCategory = await getValidWorkCategory({
+//       companyId,
+
+//       departmentId: task.departmentId,
+
+//       teamId: task.teamId,
+
+//       workCategoryId: payload.workCategoryId,
+//     });
+
+//     const previousWorkCategoryId = task.workCategoryId;
+
+//     task.workCategoryId = workCategory._id;
+
+//     activities.push({
+//       activityType: "UPDATED",
+
+//       note: "Task work category changed.",
+
+//       metadata: {
+//         previousWorkCategoryId,
+
+//         newWorkCategoryId: workCategory._id,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * QUANTITY CHANGE
+//    * ==========================================================
+//    */
+
+//   if (payload.quantity !== undefined && payload.quantity !== task.quantity) {
+//     const previousQuantity = task.quantity;
+
+//     task.quantity = payload.quantity;
+
+//     activities.push({
+//       activityType: "UPDATED",
+
+//       note: "Task quantity changed.",
+
+//       metadata: {
+//         previousQuantity,
+
+//         newQuantity: payload.quantity,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * TITLE CHANGE
+//    * ==========================================================
+//    */
+
+//   if (payload.title !== undefined && payload.title !== task.title) {
+//     const previousTitle = task.title;
+
+//     task.title = payload.title;
+
+//     activities.push({
+//       activityType: "UPDATED",
+
+//       note: "Task title updated.",
+
+//       metadata: {
+//         previousTitle,
+
+//         newTitle: payload.title,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * DESCRIPTION CHANGE
+//    * ==========================================================
+//    */
+
+//   if (
+//     payload.description !== undefined &&
+//     payload.description !== task.description
+//   ) {
+//     const previousDescription = task.description;
+
+//     task.description = payload.description;
+
+//     activities.push({
+//       activityType: "UPDATED",
+
+//       note: "Task description updated.",
+
+//       metadata: {
+//         previousDescription,
+
+//         newDescription: payload.description,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * PRIORITY CHANGE
+//    * ==========================================================
+//    */
+
+//   if (payload.priority !== undefined && payload.priority !== task.priority) {
+//     const previousPriority = task.priority;
+
+//     task.priority = payload.priority;
+
+//     activities.push({
+//       activityType: "PRIORITY_CHANGED",
+
+//       note: "Task priority changed.",
+
+//       metadata: {
+//         previousPriority,
+
+//         newPriority: payload.priority,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * DUE DATE CHANGE
+//    * ==========================================================
+//    */
+
+//   if (
+//     payload.dueDate !== undefined &&
+//     new Date(payload.dueDate).getTime() !== new Date(task.dueDate).getTime()
+//   ) {
+//     const previousDueDate = task.dueDate;
+
+//     task.dueDate = payload.dueDate;
+
+//     activities.push({
+//       activityType: "DUE_DATE_CHANGED",
+
+//       note: "Task due date changed.",
+
+//       metadata: {
+//         previousDueDate,
+
+//         newDueDate: payload.dueDate,
+//       },
+//     });
+//   }
+
+//   /**
+//    * ==========================================================
+//    * DATE CONSISTENCY
+//    * ==========================================================
+//    */
+
+//   if (task.startDate && task.dueDate && task.dueDate < task.startDate) {
+//     throw new ApiError(
+//       400,
+//       "Task due date cannot be earlier than the actual task start date.",
+//     );
+//   }
+
+//   /**
+//    * ==========================================================
+//    * NOTHING ACTUALLY CHANGED
+//    * ==========================================================
+//    *
+//    * Zod ensures at least one field is supplied,
+//    * but the supplied value might still be identical
+//    * to the existing value.
+//    */
+
+//   if (activities.length === 0) {
+//     throw new ApiError(400, "No task changes were detected.");
+//   }
+
+//   task.updatedBy = requesterUserId;
+
+//   await task.save();
+
+//   /**
+//    * ==========================================================
+//    * ACTIVITY TIMELINE
+//    * ==========================================================
+//    */
+
+//   for (const activity of activities) {
+//     await createTaskActivity({
+//       task,
+//       requesterContext,
+
+//       activityType: activity.activityType,
+
+//       fromStatus: null,
+
+//       toStatus: null,
+
+//       note: activity.note ?? "",
+
+//       metadata: activity.metadata ?? {},
+//     });
+//   }
+
+//   return getPopulatedTask(task._id);
+// };
+
+/**
+ * ============================================================
+ * UPDATE TASK
+ *
+ * Small ticket corrections only.
+ *
+ * Editable:
+ * - title
+ * - description
+ * - dueDate
+ *
+ * NOT editable here:
+ * - client
+ * - work category
+ * - quantity
+ * - priority
+ * - assignee
+ * - department
+ * - team
+ * - status
+ * - progress
+ *
+ * Reassignment and workflow changes have their own endpoints.
+ * ============================================================
+ */
+
 export const updateTask = async ({
   companyId,
   taskId,
@@ -1098,10 +1417,10 @@ export const updateTask = async ({
   });
 
   /**
-   * Completed / cancelled tickets should not have
-   * their metadata changed directly.
+   * Submitted / completed / cancelled tickets
+   * should not be edited directly.
    */
-  if (["COMPLETED", "CANCELLED"].includes(task.status)) {
+  if (["SUBMITTED", "COMPLETED", "CANCELLED"].includes(task.status)) {
     throw new ApiError(
       400,
       `Task cannot be edited while status is ${task.status}.`,
@@ -1109,17 +1428,40 @@ export const updateTask = async ({
   }
 
   /**
-   * Collect Jira-style activity records for all
-   * metadata changes made during this request.
+   * Once work has started, structural information
+   * should remain stable.
+   *
+   * Still editable:
+   * - title
+   * - description
+   * - priority
+   * - dueDate
+   *
+   * Locked:
+   * - client
+   * - work category
+   * - quantity
    */
+  if (["IN_PROGRESS", "REOPENED"].includes(task.status)) {
+    const structuralFields = ["clientId", "workCategoryId", "quantity"];
+
+    const hasStructuralChange = structuralFields.some(
+      (field) => payload[field] !== undefined,
+    );
+
+    if (hasStructuralChange) {
+      throw new ApiError(
+        400,
+        "Client, work category and quantity cannot be changed after work has started.",
+      );
+    }
+  }
+
   const activities = [];
 
   /**
-   * ==========================================================
-   * CLIENT CHANGE
-   * ==========================================================
+   * CLIENT
    */
-
   if (
     payload.clientId !== undefined &&
     payload.clientId !== task.clientId?.toString()
@@ -1135,37 +1477,26 @@ export const updateTask = async ({
 
     activities.push({
       activityType: "UPDATED",
-
       note: "Task client changed.",
-
       metadata: {
+        field: "clientId",
         previousClientId,
-
         newClientId: client._id,
       },
     });
   }
 
   /**
-   * ==========================================================
-   * WORK CATEGORY CHANGE
-   * ==========================================================
-   *
-   * The category must remain compatible with the
-   * task's existing department and team.
+   * WORK CATEGORY
    */
-
   if (
     payload.workCategoryId !== undefined &&
     payload.workCategoryId !== task.workCategoryId?.toString()
   ) {
     const workCategory = await getValidWorkCategory({
       companyId,
-
       departmentId: task.departmentId,
-
       teamId: task.teamId,
-
       workCategoryId: payload.workCategoryId,
     });
 
@@ -1175,23 +1506,18 @@ export const updateTask = async ({
 
     activities.push({
       activityType: "UPDATED",
-
       note: "Task work category changed.",
-
       metadata: {
+        field: "workCategoryId",
         previousWorkCategoryId,
-
         newWorkCategoryId: workCategory._id,
       },
     });
   }
 
   /**
-   * ==========================================================
-   * QUANTITY CHANGE
-   * ==========================================================
+   * QUANTITY
    */
-
   if (payload.quantity !== undefined && payload.quantity !== task.quantity) {
     const previousQuantity = task.quantity;
 
@@ -1199,23 +1525,18 @@ export const updateTask = async ({
 
     activities.push({
       activityType: "UPDATED",
-
       note: "Task quantity changed.",
-
       metadata: {
+        field: "quantity",
         previousQuantity,
-
         newQuantity: payload.quantity,
       },
     });
   }
 
   /**
-   * ==========================================================
-   * TITLE CHANGE
-   * ==========================================================
+   * TITLE
    */
-
   if (payload.title !== undefined && payload.title !== task.title) {
     const previousTitle = task.title;
 
@@ -1223,23 +1544,18 @@ export const updateTask = async ({
 
     activities.push({
       activityType: "UPDATED",
-
       note: "Task title updated.",
-
       metadata: {
+        field: "title",
         previousTitle,
-
         newTitle: payload.title,
       },
     });
   }
 
   /**
-   * ==========================================================
-   * DESCRIPTION CHANGE
-   * ==========================================================
+   * DESCRIPTION
    */
-
   if (
     payload.description !== undefined &&
     payload.description !== task.description
@@ -1250,23 +1566,18 @@ export const updateTask = async ({
 
     activities.push({
       activityType: "UPDATED",
-
       note: "Task description updated.",
-
       metadata: {
+        field: "description",
         previousDescription,
-
         newDescription: payload.description,
       },
     });
   }
 
   /**
-   * ==========================================================
-   * PRIORITY CHANGE
-   * ==========================================================
+   * PRIORITY
    */
-
   if (payload.priority !== undefined && payload.priority !== task.priority) {
     const previousPriority = task.priority;
 
@@ -1274,66 +1585,44 @@ export const updateTask = async ({
 
     activities.push({
       activityType: "PRIORITY_CHANGED",
-
       note: "Task priority changed.",
-
       metadata: {
+        field: "priority",
         previousPriority,
-
         newPriority: payload.priority,
       },
     });
   }
 
   /**
-   * ==========================================================
-   * DUE DATE CHANGE
-   * ==========================================================
+   * DUE DATE
    */
-
   if (
     payload.dueDate !== undefined &&
     new Date(payload.dueDate).getTime() !== new Date(task.dueDate).getTime()
   ) {
     const previousDueDate = task.dueDate;
+    const newDueDate = new Date(payload.dueDate);
 
-    task.dueDate = payload.dueDate;
+    if (task.startDate && newDueDate < task.startDate) {
+      throw new ApiError(
+        400,
+        "Task due date cannot be earlier than the actual task start date.",
+      );
+    }
+
+    task.dueDate = newDueDate;
 
     activities.push({
       activityType: "DUE_DATE_CHANGED",
-
       note: "Task due date changed.",
-
       metadata: {
+        field: "dueDate",
         previousDueDate,
-
-        newDueDate: payload.dueDate,
+        newDueDate,
       },
     });
   }
-
-  /**
-   * ==========================================================
-   * DATE CONSISTENCY
-   * ==========================================================
-   */
-
-  if (task.startDate && task.dueDate && task.dueDate < task.startDate) {
-    throw new ApiError(
-      400,
-      "Task due date cannot be earlier than the actual task start date.",
-    );
-  }
-
-  /**
-   * ==========================================================
-   * NOTHING ACTUALLY CHANGED
-   * ==========================================================
-   *
-   * Zod ensures at least one field is supplied,
-   * but the supplied value might still be identical
-   * to the existing value.
-   */
 
   if (activities.length === 0) {
     throw new ApiError(400, "No task changes were detected.");
@@ -1343,26 +1632,15 @@ export const updateTask = async ({
 
   await task.save();
 
-  /**
-   * ==========================================================
-   * ACTIVITY TIMELINE
-   * ==========================================================
-   */
-
   for (const activity of activities) {
     await createTaskActivity({
       task,
       requesterContext,
-
       activityType: activity.activityType,
-
       fromStatus: null,
-
       toStatus: null,
-
-      note: activity.note ?? "",
-
-      metadata: activity.metadata ?? {},
+      note: activity.note,
+      metadata: activity.metadata,
     });
   }
 
