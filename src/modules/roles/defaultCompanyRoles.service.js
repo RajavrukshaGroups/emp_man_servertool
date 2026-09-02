@@ -76,8 +76,27 @@ const DEFAULT_COMPANY_ROLES = [
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",
+
       "attendance.correction_request",
+      "attendance.correction_recommend",
       "attendance.correction_approve",
+
+      "attendance.policy_read",
+      "attendance.policy_update",
+
+      "attendance.location_read",
+      "attendance.location_manage",
+
+      "attendance.shift_read",
+      "attendance.shift_manage",
+
+      "attendance.adjust",
+
+      "attendance.field_visit_create",
+      "attendance.field_visit_read",
+      "attendance.field_visit_update",
+
+      "attendance.summary_read",
 
       "report.read",
       "report.export",
@@ -134,6 +153,13 @@ const DEFAULT_COMPANY_ROLES = [
       "attendance.check_out",
       "attendance.read",
       "attendance.correction_request",
+      "attendance.correction_recommend",
+      "attendance.location_read",
+      "attendance.shift_read",
+      "attendance.field_visit_create",
+      "attendance.field_visit_read",
+      "attendance.field_visit_update",
+      "attendance.summary_read",
 
       "announcement.read",
     ],
@@ -179,7 +205,15 @@ const DEFAULT_COMPANY_ROLES = [
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",
+
       "attendance.correction_request",
+
+      "attendance.location_read",
+      "attendance.shift_read",
+
+      "attendance.field_visit_create",
+      "attendance.field_visit_read",
+      "attendance.field_visit_update",
 
       "announcement.read",
     ],

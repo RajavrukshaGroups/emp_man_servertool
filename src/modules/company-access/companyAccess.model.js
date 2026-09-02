@@ -108,6 +108,41 @@ const companyAccessSchema = new mongoose.Schema(
       maxlength: [150, "Work location name cannot exceed 150 characters."],
     },
 
+    /**
+     * Controls how attendance/location rules apply to this employee.
+     *
+     * OFFICE:
+     *   Attendance is expected from configured office/work locations.
+     *
+     * FIELD:
+     *   Employee can work from field/client/site locations.
+     *
+     * HYBRID:
+     *   Employee can work from both configured office locations and field.
+     *
+     * REMOTE:
+     *   Employee is primarily remote and may not require office geofencing.
+     */
+    attendanceMode: {
+      type: String,
+      enum: ["OFFICE", "FIELD", "HYBRID", "REMOTE"],
+      default: "OFFICE",
+      index: true,
+    },
+
+    /**
+     * Employee's currently assigned work shift.
+     *
+     * Shift rules define expected start/end time,
+     * working minutes, break rules and grace periods.
+     */
+    shiftId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Shift",
+      default: null,
+      index: true,
+    },
+
     isPrimaryCompany: {
       type: Boolean,
       default: false,
@@ -243,6 +278,18 @@ companyAccessSchema.index({
 
 companyAccessSchema.index({
   createdAt: -1,
+});
+
+companyAccessSchema.index({
+  companyId: 1,
+  attendanceMode: 1,
+  status: 1,
+});
+
+companyAccessSchema.index({
+  companyId: 1,
+  shiftId: 1,
+  status: 1,
 });
 
 /**

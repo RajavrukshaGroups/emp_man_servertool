@@ -4,9 +4,11 @@ import companyRoutes from "../modules/companies/company.routes.js";
 import permissionRoutes from "../modules/permissions/permission.routes.js";
 import roleRoutes from "../modules/roles/role.routes.js";
 import userRoutes from "../modules/users/user.routes.js";
+
 import platformAccessRoutes, {
   platformRoleRouter,
 } from "../modules/platform-access/platformAccess.routes.js";
+
 import {
   userCompanyAccessRouter,
   companyAccessRouter,
@@ -22,6 +24,7 @@ import onboardingRoutes from "../modules/onboarding/onboarding.route.js";
 import companyAdministratorRoutes from "../modules/company-administrators/companyAdministrator.routes.js";
 import clientRoutes from "../modules/clients/client.routes.js";
 import workCategoryRoutes from "../modules/work-categories/workCategory.routes.js";
+import attendanceRoutes from "../modules/attendance/attendance.routes.js";
 
 import { ApiResponse } from "../utils/ApiResponse.js";
 
@@ -45,27 +48,47 @@ router.get("/health", (req, res) => {
 });
 
 /**
- * Authentication
+ * ============================================================
+ * AUTHENTICATION
+ * ============================================================
  */
 router.use("/auth", authRoutes);
 
 /**
- * Global resources
+ * ============================================================
+ * GLOBAL RESOURCES
+ * ============================================================
  */
 router.use("/permissions", permissionRoutes);
+
 router.use("/users", userRoutes);
+
 router.use("/users/:userId/company-access", userCompanyAccessRouter);
 
 /**
- * Platform administration
+ * ============================================================
+ * PLATFORM ADMINISTRATION
+ * ============================================================
  */
 router.use("/platform/admins", platformAccessRoutes);
+
 router.use("/platform/roles", platformRoleRouter);
+
 /**
+ * ============================================================
+ * COMPANY-SPECIFIC NESTED ROUTES
+ * ============================================================
+ *
  * IMPORTANT:
- * Company-specific nested routes MUST come before
- * the generic /companies router.
+ *
+ * These MUST remain before:
+ *
+ * router.use("/companies", companyRoutes);
+ *
+ * Otherwise generic company routes may intercept nested
+ * company resources.
  */
+
 router.use("/companies/:companyId/administrators", companyAdministratorRoutes);
 
 router.use("/companies/:companyId/roles", roleRoutes);
@@ -84,17 +107,23 @@ router.use("/companies/:companyId/employees", employeeRoutes);
 
 router.use("/companies/:companyId/tasks", taskRoutes);
 
+router.use("/companies/:companyId/attendance", attendanceRoutes);
+
 router.use("/companies/:companyId/dashboard", dashboardRoutes);
 
 /**
- * Generic company-management routes.
+ * ============================================================
+ * GENERIC COMPANY MANAGEMENT ROUTES
+ * ============================================================
  *
  * Keep this AFTER all company nested routes.
  */
 router.use("/companies", companyRoutes);
 
 /**
- * Onboarding
+ * ============================================================
+ * ONBOARDING
+ * ============================================================
  */
 router.use("/onboarding", onboardingRoutes);
 

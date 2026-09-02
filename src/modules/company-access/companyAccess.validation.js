@@ -29,6 +29,7 @@ const workLocationTypes = [
   "CLIENT_LOCATION",
 ];
 
+const attendanceModes = ["OFFICE", "FIELD", "HYBRID", "REMOTE"];
 const optionalText = (maximumLength, fieldName = "Text") =>
   z
     .string()
@@ -139,6 +140,10 @@ const createCompanyAccessBodySchema = z
 
     workLocationName: optionalText(150, "Work location name").default(""),
 
+    attendanceMode: z.enum(attendanceModes).default("OFFICE"),
+
+    shiftId: nullableObjectIdSchema,
+
     isPrimaryCompany: z.boolean().default(false),
 
     status: z.enum(companyAccessStatuses).default("ONBOARDING"),
@@ -196,6 +201,10 @@ const updateCompanyAccessBodySchema = z
     workLocationType: z.enum(workLocationTypes).optional(),
 
     workLocationName: optionalText(150, "Work location name"),
+
+    attendanceMode: z.enum(attendanceModes).optional(),
+
+    shiftId: nullableObjectIdSchema,
 
     isPrimaryCompany: z.boolean().optional(),
 
@@ -359,6 +368,10 @@ export const listCompanyAccessSchema = z.object({
       employmentType: z.enum(employmentTypes).optional(),
 
       workLocationType: z.enum(workLocationTypes).optional(),
+
+      attendanceMode: z.enum(attendanceModes).optional(),
+
+      shiftId: objectIdSchema.optional(),
 
       status: z.enum(companyAccessStatuses).optional(),
 

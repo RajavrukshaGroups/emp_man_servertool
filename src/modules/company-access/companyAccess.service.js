@@ -30,6 +30,10 @@ const companyAccessPopulate = [
     },
   },
   {
+    path: "shiftId",
+    select: "name code startTime endTime fullDayMinutes halfDayMinutes status",
+  },
+  {
     path: "reportingManagerId",
     select: "userId employeeCode designation departmentId teamId status",
     populate: {
@@ -393,6 +397,10 @@ export const createCompanyAccess = async (
 
             workLocationName: accessData.workLocationName ?? "",
 
+            attendanceMode: accessData.attendanceMode ?? "OFFICE",
+
+            shiftId: accessData.shiftId ?? null,
+
             isPrimaryCompany: accessData.isPrimaryCompany ?? false,
 
             status: accessData.status ?? "ONBOARDING",
@@ -460,6 +468,8 @@ export const listCompanyAccess = async (
     reportingManagerId,
     employmentType,
     workLocationType,
+    attendanceMode,
+    shiftId,
     status,
     isPrimaryCompany,
     joiningDateFrom,
@@ -497,6 +507,14 @@ export const listCompanyAccess = async (
 
   if (workLocationType) {
     filter.workLocationType = workLocationType;
+  }
+
+  if (attendanceMode) {
+    filter.attendanceMode = attendanceMode;
+  }
+
+  if (shiftId) {
+    filter.shiftId = shiftId;
   }
 
   if (status) {
@@ -678,6 +696,8 @@ export const updateCompanyAccess = async (
         "probationEndDate",
         "workLocationType",
         "workLocationName",
+        "attendanceMode",
+        "shiftId",
         "isPrimaryCompany",
         "notes",
       ];
