@@ -37,6 +37,15 @@ import {
   getMyFieldVisitHistorySchema,
   listFieldVisitsSchema,
   getFieldVisitSchema,
+
+  // REGULARIZATION
+  createRegularizationSchema,
+  listRegularizationsSchema,
+  getRegularizationSchema,
+  recommendRegularizationSchema,
+  approveRegularizationSchema,
+  rejectRegularizationSchema,
+  cancelRegularizationSchema,
 } from "./attendance.validation.js";
 
 import {
@@ -80,6 +89,17 @@ import {
   listFieldVisits,
   getFieldVisit,
 } from "./fieldVisit.controller.js";
+
+import {
+  createRegularization,
+  getMyRegularizations,
+  listRegularizations,
+  getRegularizationById,
+  recommendRegularization,
+  approveRegularization,
+  rejectRegularization,
+  cancelRegularization,
+} from "./attendanceRegularization.controller.js";
 
 const router = express.Router({
   mergeParams: true,
@@ -384,6 +404,132 @@ router.get(
   authorize(PERMISSIONS.ATTENDANCE_FIELD_VISIT_READ),
   validate(getFieldVisitSchema),
   getFieldVisit,
+);
+
+/**
+ * ============================================================
+ * ATTENDANCE REGULARIZATION
+ * ============================================================
+ */
+
+/**
+ * CREATE OWN REGULARIZATION REQUEST
+ *
+ * POST
+ * /companies/:companyId/attendance/regularizations
+ *
+ * Employee identity comes from authentication.
+ */
+router.post(
+  "/regularizations",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_REQUEST),
+  validate(createRegularizationSchema),
+  createRegularization,
+);
+
+/**
+ * MY REGULARIZATION HISTORY
+ *
+ * GET
+ * /companies/:companyId/attendance/regularizations/me/history
+ */
+router.get(
+  "/regularizations/me/history",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_REQUEST),
+  validate(listRegularizationsSchema),
+  getMyRegularizations,
+);
+
+/**
+ * LIST REGULARIZATION REQUESTS
+ *
+ * GET
+ * /companies/:companyId/attendance/regularizations
+ *
+ * Scope:
+ * COMPANY    -> company
+ * DEPARTMENT -> department
+ * TEAM       -> managed teams + self
+ */
+router.get(
+  "/regularizations",
+  authorize(PERMISSIONS.ATTENDANCE_READ),
+  validate(listRegularizationsSchema),
+  listRegularizations,
+);
+
+/**
+ * RECOMMEND REGULARIZATION
+ *
+ * POST
+ * /companies/:companyId/attendance/regularizations/:regularizationId/recommend
+ *
+ * Usually Team Lead / Manager.
+ */
+router.post(
+  "/regularizations/:regularizationId/recommend",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_RECOMMEND),
+  validate(recommendRegularizationSchema),
+  recommendRegularization,
+);
+
+/**
+ * APPROVE REGULARIZATION
+ *
+ * POST
+ * /companies/:companyId/attendance/regularizations/:regularizationId/approve
+ *
+ * Usually HR / Company Admin.
+ *
+ * Approval applies the correction and recalculates attendance.
+ */
+router.post(
+  "/regularizations/:regularizationId/approve",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_APPROVE),
+  validate(approveRegularizationSchema),
+  approveRegularization,
+);
+
+/**
+ * REJECT REGULARIZATION
+ *
+ * POST
+ * /companies/:companyId/attendance/regularizations/:regularizationId/reject
+ */
+router.post(
+  "/regularizations/:regularizationId/reject",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_APPROVE),
+  validate(rejectRegularizationSchema),
+  rejectRegularization,
+);
+
+/**
+ * CANCEL OWN REGULARIZATION
+ *
+ * POST
+ * /companies/:companyId/attendance/regularizations/:regularizationId/cancel
+ */
+router.post(
+  "/regularizations/:regularizationId/cancel",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_REQUEST),
+  validate(cancelRegularizationSchema),
+  cancelRegularization,
+);
+
+/**
+ * GET REGULARIZATION BY ID
+ *
+ * GET
+ * /companies/:companyId/attendance/regularizations/:regularizationId
+ *
+ * IMPORTANT:
+ * Keep this after all named regularization routes.
+ */
+router.get(
+  "/regularizations/:regularizationId",
+  authorize(PERMISSIONS.ATTENDANCE_READ),
+  validate(getRegularizationSchema),
+  getRegularizationById,
 );
 
 /**

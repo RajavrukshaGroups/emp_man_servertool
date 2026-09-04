@@ -633,7 +633,7 @@ const attendancePolicyBaseSchema = z
 
     fieldVisitEnabled: z.boolean().default(true),
 
-    fieldVisitLocationRequired: z.boolean().default(true),
+    // fieldVisitLocationRequired: z.boolean().default(true),
 
     fieldVisitPurposeRequired: z.boolean().default(true),
 
@@ -915,6 +915,10 @@ export const createRegularizationSchema = z.object({
     .object({
       attendanceId: objectIdSchema.optional().nullable(),
 
+      targetWorkSessionId: objectIdSchema.optional().nullable(),
+
+      targetBreakId: objectIdSchema.optional().nullable(),
+
       requestType: z.enum([
         "MISSING_CHECK_IN",
         "MISSING_CHECKOUT",
@@ -949,6 +953,49 @@ export const createRegularizationSchema = z.object({
     })
     .strict()
     .superRefine((data, ctx) => {
+      /**
+       * ======================================================
+       * TARGET SESSION / BREAK VALIDATION
+       * ======================================================
+       *
+       * Attendance can contain multiple work sessions and
+       * multiple breaks. Correction requests must identify
+       * exactly which embedded record is being corrected.
+       */
+
+      if (
+        [
+          "MISSING_CHECKOUT",
+          "CHECK_IN_TIME_CORRECTION",
+          "CHECKOUT_TIME_CORRECTION",
+        ].includes(data.requestType) &&
+        !data.targetWorkSessionId
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["targetWorkSessionId"],
+          message:
+            "Target work session is required for this regularization type.",
+        });
+      }
+
+      if (
+        ["BREAK_CORRECTION", "BREAK_EXTENSION"].includes(data.requestType) &&
+        !data.targetBreakId
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["targetBreakId"],
+          message: "Target break is required for this regularization type.",
+        });
+      }
+
+      /**
+       * ======================================================
+       * REQUESTED VALUE VALIDATION
+       * ======================================================
+       */
+
       if (
         ["MISSING_CHECK_IN", "CHECK_IN_TIME_CORRECTION"].includes(
           data.requestType,
@@ -963,15 +1010,31 @@ export const createRegularizationSchema = z.object({
       }
 
       if (
-        ["MISSING_CHECKOUT", "CHECKOUT_TIME_CORRECTION"].includes(
-          data.requestType,
-        ) &&
+        [
+          "MISSING_CHECK_IN",
+          "MISSING_CHECKOUT",
+          "CHECKOUT_TIME_CORRECTION",
+        ].includes(data.requestType) &&
         !data.requestedCheckOutAt
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["requestedCheckOutAt"],
           message: "Requested checkout time is required for this request type.",
+        });
+      }
+
+      if (
+        data.requestType === "MISSING_CHECK_IN" &&
+        data.requestedCheckInAt &&
+        data.requestedCheckOutAt &&
+        new Date(data.requestedCheckOutAt) <= new Date(data.requestedCheckInAt)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["requestedCheckOutAt"],
+          message:
+            "Requested checkout time must be later than requested check-in time.",
         });
       }
 

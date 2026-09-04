@@ -274,10 +274,7 @@ const attendancePolicySchema = new mongoose.Schema(
      * Require location evidence when starting or ending
      * a field/client visit.
      */
-    fieldVisitLocationRequired: {
-      type: Boolean,
-      default: true,
-    },
+    
 
     /**
      * Require employee to give a purpose before starting

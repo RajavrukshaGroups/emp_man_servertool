@@ -125,6 +125,30 @@ const calculateDurationMinutes = (startedAt, endedAt) => {
   );
 };
 
+const normalizeText = (value, maxLength = 500) =>
+  String(value || "")
+    .trim()
+    .slice(0, maxLength);
+
+const appendTextSafely = ({
+  existingText = "",
+  newText = "",
+  maxLength = 500,
+}) => {
+  const existing = String(existingText || "").trim();
+  const incoming = String(newText || "").trim();
+
+  if (!incoming) {
+    return existing.slice(0, maxLength);
+  }
+
+  if (!existing) {
+    return incoming.slice(0, maxLength);
+  }
+
+  return `${existing}\n${incoming}`.slice(0, maxLength);
+};
+
 /**
  * ============================================================
  * REQUEST META
@@ -531,6 +555,19 @@ export const startFieldVisit = async ({
         );
       }
 
+      /**
+       * Enforce field-visit purpose policy.
+       */
+      if (
+        policy?.fieldVisitPurposeRequired === true &&
+        !String(data.purpose || "").trim()
+      ) {
+        throw new ApiError(
+          400,
+          "Field visit purpose is required by the attendance policy.",
+        );
+      }
+
       const client = await resolveClient({
         companyId,
         clientId: data.clientId,
@@ -564,9 +601,9 @@ export const startFieldVisit = async ({
 
             clientId: client?._id ?? null,
 
-            siteName: data.siteName || "",
+            siteName: normalizeText(data.siteName, 200),
 
-            purpose: data.purpose,
+            purpose: normalizeText(data.purpose, 1500),
 
             startedAt: currentTime,
 
@@ -580,7 +617,7 @@ export const startFieldVisit = async ({
 
             outcome: "",
 
-            notes: data.notes || "",
+            notes: normalizeText(data.notes, 2000),
 
             status: "IN_PROGRESS",
 
@@ -672,6 +709,16 @@ export const endFieldVisit = async ({
         session: mongoSession,
       });
 
+      if (
+        policy?.fieldVisitOutcomeRequired === true &&
+        !String(data.outcome || "").trim()
+      ) {
+        throw new ApiError(
+          400,
+          "Field visit outcome is required by the attendance policy.",
+        );
+      }
+
       const currentTime = new Date();
 
       const endLocation = await buildLocationEvidence({
@@ -682,7 +729,6 @@ export const endFieldVisit = async ({
         currentTime,
         session: mongoSession,
       });
-
       fieldVisit.endedAt = currentTime;
 
       fieldVisit.endLocation = endLocation;
@@ -692,19 +738,18 @@ export const endFieldVisit = async ({
         currentTime,
       );
 
-      fieldVisit.outcome = data.outcome || "";
-
+      fieldVisit.outcome = normalizeText(data.outcome, 2000);
       /**
        * Preserve the start note.
        *
        * If the end request contains notes, append rather
        * than silently destroy the original note.
        */
-      if (data.notes) {
-        fieldVisit.notes = fieldVisit.notes
-          ? `${fieldVisit.notes}\n${data.notes}`
-          : data.notes;
-      }
+      fieldVisit.notes = appendTextSafely({
+        existingText: fieldVisit.notes,
+        newText: data.notes,
+        maxLength: 2000,
+      });
 
       fieldVisit.status = "COMPLETED";
 

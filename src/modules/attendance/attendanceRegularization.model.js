@@ -95,6 +95,28 @@ const attendanceRegularizationSchema = new mongoose.Schema(
 
     /**
      * ========================================================
+     * TARGET ATTENDANCE EVENT
+     * ========================================================
+     *
+     * Identifies the exact session/break being corrected.
+     *
+     * Attendance supports multiple work sessions and breaks,
+     * therefore the service must never guess which event the
+     * employee intended to regularize.
+     */
+
+    targetWorkSessionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    targetBreakId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    /**
+     * ========================================================
      * REQUEST TYPE
      * ========================================================
      */
@@ -148,6 +170,43 @@ const attendanceRegularizationSchema = new mongoose.Schema(
       default: null,
       min: [0, "Requested break extension minutes cannot be negative."],
       max: [720, "Requested break extension cannot exceed 720 minutes."],
+    },
+
+    /**
+     * ========================================================
+     * ORIGINAL VALUE SNAPSHOT
+     * ========================================================
+     *
+     * Captured when the request is created.
+     *
+     * These fields preserve the original attendance facts even
+     * if an approved regularization later updates Attendance.
+     */
+
+    originalCheckInAt: {
+      type: Date,
+      default: null,
+    },
+
+    originalCheckOutAt: {
+      type: Date,
+      default: null,
+    },
+
+    originalBreakStartAt: {
+      type: Date,
+      default: null,
+    },
+
+    originalBreakEndAt: {
+      type: Date,
+      default: null,
+    },
+
+    originalBreakDurationMinutes: {
+      type: Number,
+      default: null,
+      min: 0,
     },
 
     locationEvidence: {
@@ -414,14 +473,56 @@ attendanceRegularizationSchema.index({
  */
 
 attendanceRegularizationSchema.pre("validate", function () {
+  /**
+   * Exact target session is required for corrections that
+   * operate on an existing work session.
+   *
+   * MISSING_CHECK_IN is intentionally excluded because a true
+   * missed check-in may not have an existing target session.
+   */
   if (
-    ["MISSING_CHECK_IN", "CHECK_IN_TIME_CORRECTION"].includes(
-      this.requestType,
-    ) &&
-    !this.requestedCheckInAt
+    [
+      "MISSING_CHECKOUT",
+      "CHECK_IN_TIME_CORRECTION",
+      "CHECKOUT_TIME_CORRECTION",
+    ].includes(this.requestType) &&
+    !this.targetWorkSessionId
   ) {
     throw new Error(
-      "Requested check-in time is required for this regularization type.",
+      "Target work session is required for this regularization type.",
+    );
+  }
+
+  /**
+   * Break corrections must identify the exact embedded break.
+   */
+  if (
+    ["BREAK_CORRECTION", "BREAK_EXTENSION"].includes(this.requestType) &&
+    !this.targetBreakId
+  ) {
+    throw new Error("Target break is required for this regularization type.");
+  }
+  if (
+    [
+      "MISSING_CHECK_IN",
+      "MISSING_CHECKOUT",
+      "CHECKOUT_TIME_CORRECTION",
+    ].includes(this.requestType) &&
+    !this.requestedCheckOutAt
+  ) {
+    throw new Error(
+      "Requested checkout time is required for this regularization type.",
+    );
+  }
+
+  if (
+    this.requestType === "MISSING_CHECK_IN" &&
+    this.requestedCheckInAt &&
+    this.requestedCheckOutAt &&
+    new Date(this.requestedCheckOutAt) <= new Date(this.requestedCheckInAt)
+  ) {
+    throw new Error(
+      "Requested checkout time must be later than requested check-in time.",
     );
   }
 
