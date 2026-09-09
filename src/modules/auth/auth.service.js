@@ -369,12 +369,19 @@ const buildAuthenticationResponse = ({ user, companyAccess, accessToken }) => {
       employeeCode: companyAccess.employeeCode,
       designation: companyAccess.designation,
       employmentType: companyAccess.employmentType,
+
       departmentId: companyAccess.departmentId,
       teamId: companyAccess.teamId,
       reportingManagerId: companyAccess.reportingManagerId,
+
       joiningDate: companyAccess.joiningDate,
+
       workLocationType: companyAccess.workLocationType,
       workLocationName: companyAccess.workLocationName,
+
+      attendanceMode: companyAccess.attendanceMode,
+      shiftId: companyAccess.shiftId,
+
       isPrimaryCompany: companyAccess.isPrimaryCompany,
       status: companyAccess.status,
     },

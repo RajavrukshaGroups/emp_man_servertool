@@ -144,6 +144,8 @@ const createCompanyAccessBodySchema = z
 
     shiftId: nullableObjectIdSchema,
 
+    attendanceLocationId: nullableObjectIdSchema,
+
     isPrimaryCompany: z.boolean().default(false),
 
     status: z.enum(companyAccessStatuses).default("ONBOARDING"),
@@ -205,6 +207,8 @@ const updateCompanyAccessBodySchema = z
     attendanceMode: z.enum(attendanceModes).optional(),
 
     shiftId: nullableObjectIdSchema,
+
+    attendanceLocationId: nullableObjectIdSchema,
 
     isPrimaryCompany: z.boolean().optional(),
 
@@ -372,6 +376,8 @@ export const listCompanyAccessSchema = z.object({
       attendanceMode: z.enum(attendanceModes).optional(),
 
       shiftId: objectIdSchema.optional(),
+
+      attendanceLocationId: objectIdSchema.optional(),
 
       status: z.enum(companyAccessStatuses).optional(),
 

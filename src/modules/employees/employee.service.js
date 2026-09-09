@@ -17,28 +17,46 @@ const employeePopulateOptions = [
   },
   {
     path: "companyAccessId",
+
     select:
-      "employeeCode designation employmentType departmentId teamId roleId reportingManagerId joiningDate probationEndDate lastWorkingDate workLocationType workLocationName status",
+      "employeeCode designation employmentType departmentId teamId roleId reportingManagerId joiningDate probationEndDate lastWorkingDate workLocationType workLocationName attendanceMode shiftId status",
+
     populate: [
       {
         path: "departmentId",
         select: "name code status",
       },
+
       {
         path: "teamId",
         select: "name code status",
       },
+
       {
         path: "roleId",
         select: "name code scopeType status",
       },
+
+      {
+        path: "shiftId",
+        select:
+          "name code startTime endTime fullDayMinutes halfDayMinutes status",
+      },
+
+      {
+        path: "attendanceLocationId",
+        select:
+          "name code locationType latitude longitude geofenceRadiusMeters status",
+      },
+
       {
         path: "reportingManagerId",
         select: "employeeCode designation userId departmentId teamId status",
+
         populate: {
           path: "userId",
           select:
-            "firstName middleName lastName displayName email mobile profilePhoto status onboardingStatus onboardingCompletedAt",
+            "firstName middleName lastName displayName email mobile profilePhoto status",
         },
       },
     ],

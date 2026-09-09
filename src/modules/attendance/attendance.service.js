@@ -51,7 +51,7 @@ const attendancePopulate = [
   {
     path: "companyAccessId",
     select:
-      "userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId workLocationType workLocationName status",
+      "userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId workLocationType workLocationName status",
     populate: [
       {
         path: "departmentId",
@@ -69,6 +69,11 @@ const attendancePopulate = [
         path: "shiftId",
         select:
           "name code startTime endTime isOvernight fullDayMinutes halfDayMinutes lateGraceMinutes earlyCheckoutGraceMinutes standardBreakMinutes maxBreakMinutes allowMultipleBreaks status",
+      },
+      {
+        path: "attendanceLocationId",
+        select:
+          "name code locationType latitude longitude geofenceRadiusMeters allowCheckIn allowCheckOut status",
       },
     ],
   },
@@ -212,7 +217,7 @@ const resolveSelfAttendanceContext = async ({
     companyId,
     isDeleted: false,
   }).select(
-    "_id userId companyId employeeCode designation departmentId teamId roleId reportingManagerId attendanceMode shiftId workLocationType workLocationName status",
+    "_id userId companyId employeeCode designation departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId workLocationType workLocationName status",
   );
 
   if (session) {
@@ -1409,16 +1414,25 @@ export const checkInAttendance = async ({
         );
       }
 
+      const attendanceMode = companyAccess.attendanceMode || "OFFICE";
+
+      if (attendanceMode === "OFFICE" && !companyAccess.attendanceLocationId) {
+        throw new ApiError(
+          409,
+          "No attendance location has been assigned to this employee. Please contact the administrator.",
+        );
+      }
+
       const locationEvidence = await buildAttendanceLocationEvidence({
         companyId,
 
-        attendanceMode: companyAccess.attendanceMode || "OFFICE",
+        attendanceMode,
 
         policy,
 
         locationInput: data.location || null,
 
-        attendanceLocationId: data.attendanceLocationId || null,
+        attendanceLocationId: companyAccess.attendanceLocationId || null,
 
         action: "CHECK_IN",
 
@@ -1890,22 +1904,39 @@ export const checkOutAttendance = async ({
           "You have an active field visit. Please end or cancel the field visit before checking out.",
         );
       }
-
       const policy = await resolveAttendancePolicyById({
         companyId,
         policyId: attendance.attendancePolicyId,
         session,
       });
 
+      const attendanceMode =
+        companyAccess.attendanceMode || attendance.attendanceMode || "OFFICE";
+
+      if (attendanceMode === "OFFICE" && !companyAccess.attendanceLocationId) {
+        throw new ApiError(
+          409,
+          "No attendance location has been assigned to this employee. Please contact the administrator.",
+        );
+      }
+
       const locationEvidence = await buildAttendanceLocationEvidence({
         companyId,
-        attendanceMode: attendance.attendanceMode,
+
+        attendanceMode,
+
         policy,
+
         locationInput: data.location || null,
-        attendanceLocationId: data.attendanceLocationId || null,
+
+        attendanceLocationId: companyAccess.attendanceLocationId || null,
+
         action: "CHECK_OUT",
+
         currentTime,
+
         requestMeta,
+
         session,
       });
 

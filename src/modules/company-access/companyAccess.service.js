@@ -7,7 +7,7 @@ import Role from "../roles/role.model.js";
 import User from "../users/user.model.js";
 
 import CompanyAccess from "./companyAccess.model.js";
-
+import AttendanceLocation from "../attendance/attendanceLocation.model.js";
 /**
  * Common population configuration.
  */
@@ -32,6 +32,11 @@ const companyAccessPopulate = [
   {
     path: "shiftId",
     select: "name code startTime endTime fullDayMinutes halfDayMinutes status",
+  },
+  {
+    path: "attendanceLocationId",
+    select:
+      "name code locationType latitude longitude geofenceRadiusMeters allowCheckIn allowCheckOut status",
   },
   {
     path: "reportingManagerId",
@@ -133,6 +138,35 @@ const ensureRoleBelongsToCompany = async (roleId, companyId) => {
   }
 
   return role;
+};
+
+const ensureAttendanceLocationIsValid = async ({
+  attendanceLocationId,
+  companyId,
+}) => {
+  if (!attendanceLocationId) {
+    return null;
+  }
+
+  const location = await AttendanceLocation.findOne({
+    _id: attendanceLocationId,
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+  })
+    .select(
+      "_id companyId name code locationType geofenceRadiusMeters allowCheckIn allowCheckOut status",
+    )
+    .lean();
+
+  if (!location) {
+    throw new ApiError(
+      400,
+      "The selected attendance location does not exist, is inactive, or does not belong to this company.",
+    );
+  }
+
+  return location;
 };
 
 const validateRoleScopeAssignment = ({ role, departmentId, teamId }) => {
@@ -341,8 +375,14 @@ export const createCompanyAccess = async (
     ensureUserExists(accessData.userId),
     ensureUserAccessIsUnique(companyId, accessData.userId),
     ensureEmployeeCodeIsUnique(companyId, accessData.employeeCode),
+
     ensureReportingManagerIsValid({
       reportingManagerId: accessData.reportingManagerId,
+      companyId,
+    }),
+
+    ensureAttendanceLocationIsValid({
+      attendanceLocationId: accessData.attendanceLocationId,
       companyId,
     }),
   ]);
@@ -400,6 +440,8 @@ export const createCompanyAccess = async (
             attendanceMode: accessData.attendanceMode ?? "OFFICE",
 
             shiftId: accessData.shiftId ?? null,
+
+            attendanceLocationId: accessData.attendanceLocationId ?? null,
 
             isPrimaryCompany: accessData.isPrimaryCompany ?? false,
 
@@ -470,6 +512,7 @@ export const listCompanyAccess = async (
     workLocationType,
     attendanceMode,
     shiftId,
+    attendanceLocationId,
     status,
     isPrimaryCompany,
     joiningDateFrom,
@@ -515,6 +558,10 @@ export const listCompanyAccess = async (
 
   if (shiftId) {
     filter.shiftId = shiftId;
+  }
+
+  if (attendanceLocationId) {
+    filter.attendanceLocationId = attendanceLocationId;
   }
 
   if (status) {
@@ -671,6 +718,13 @@ export const updateCompanyAccess = async (
     });
   }
 
+  if (updateData.attendanceLocationId !== undefined) {
+    await ensureAttendanceLocationIsValid({
+      attendanceLocationId: updateData.attendanceLocationId,
+      companyId,
+    });
+  }
+
   const session = await mongoose.startSession();
 
   try {
@@ -698,6 +752,7 @@ export const updateCompanyAccess = async (
         "workLocationName",
         "attendanceMode",
         "shiftId",
+        "attendanceLocationId",
         "isPrimaryCompany",
         "notes",
       ];

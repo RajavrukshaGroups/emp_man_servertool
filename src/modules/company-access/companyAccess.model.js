@@ -143,6 +143,13 @@ const companyAccessSchema = new mongoose.Schema(
       index: true,
     },
 
+    attendanceLocationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AttendanceLocation",
+      default: null,
+      index: true,
+    },
+
     isPrimaryCompany: {
       type: Boolean,
       default: false,
