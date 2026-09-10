@@ -29,6 +29,7 @@ import {
 
 import {
   buildAttendanceReadFilter,
+  buildReadableCompanyAccessFilter,
   canAccessCompanyAccess,
   getSelfAttendanceIdentity,
 } from "./attendance.scope.js";
@@ -1070,6 +1071,315 @@ const buildAttendanceListQuery = ({ baseFilter, query = {} }) => {
 
   return {
     $and: [baseFilter, userFilter],
+  };
+};
+
+/**
+ * ============================================================
+ * DAILY ATTENDANCE SUMMARY
+ * ============================================================
+ *
+ * Returns every ACTIVE employee visible to the requester,
+ * including employees who do not yet have an Attendance
+ * document for the requested date.
+ *
+ * IMPORTANT:
+ *
+ * Missing Attendance != ABSENT automatically.
+ *
+ * During the day, the employee is represented as:
+ *
+ * NOT_CHECKED_IN
+ *
+ * Leave / holiday / weekly-off integration can override this
+ * later.
+ */
+
+export const getDailyAttendanceSummary = async ({
+  companyId,
+  query = {},
+  requesterContext,
+}) => {
+  await resolveAttendanceCompany(companyId);
+
+  const { date, departmentId, teamId, shiftId, attendanceStatus, search } =
+    query;
+
+  /**
+   * ========================================================
+   * AUTHORIZED COMPANY ACCESS SCOPE
+   * ========================================================
+   */
+
+  const scopeFilter = await buildReadableCompanyAccessFilter({
+    requesterContext,
+    companyId,
+  });
+
+  /**
+   * Additional filters must never replace scope.
+   */
+  const accessUserFilter = {
+    status: "ACTIVE",
+  };
+
+  if (departmentId) {
+    accessUserFilter.departmentId = departmentId;
+  }
+
+  if (teamId) {
+    accessUserFilter.teamId = teamId;
+  }
+
+  if (shiftId) {
+    accessUserFilter.shiftId = shiftId;
+  }
+
+  if (search) {
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    accessUserFilter.$or = [
+      {
+        employeeCode: {
+          $regex: escapedSearch,
+          $options: "i",
+        },
+      },
+      {
+        designation: {
+          $regex: escapedSearch,
+          $options: "i",
+        },
+      },
+    ];
+  }
+
+  const accessFilter = {
+    $and: [scopeFilter, accessUserFilter],
+  };
+
+  /**
+   * ========================================================
+   * RESOLVE VISIBLE COMPANY ACCESS RECORDS
+   * ========================================================
+   *
+   * Do NOT paginate here yet, because we first need to remove
+   * company users who do not have Employee profiles.
+   */
+
+  const companyAccesses = await CompanyAccess.find(accessFilter)
+    .select(
+      "_id userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId workLocationType workLocationName status",
+    )
+    .populate([
+      {
+        path: "userId",
+        select:
+          "firstName middleName lastName displayName email mobile profilePhoto status",
+      },
+      {
+        path: "departmentId",
+        select: "name code status",
+      },
+      {
+        path: "teamId",
+        select: "name code status",
+      },
+      {
+        path: "roleId",
+        select: "name code scopeType status",
+      },
+      {
+        path: "shiftId",
+        select:
+          "name code startTime endTime isOvernight fullDayMinutes halfDayMinutes lateGraceMinutes earlyCheckoutGraceMinutes standardBreakMinutes maxBreakMinutes allowMultipleBreaks status",
+      },
+      {
+        path: "attendanceLocationId",
+        select:
+          "name code locationType latitude longitude geofenceRadiusMeters allowCheckIn allowCheckOut status",
+      },
+    ])
+    .lean();
+
+  const companyAccessIds = companyAccesses.map((access) => access._id);
+
+  /**
+   * ========================================================
+   * ONLY REAL EMPLOYEE PROFILES
+   * ========================================================
+   *
+   * This prevents Company Administrator accounts without an
+   * Employee profile from appearing in the attendance sheet.
+   */
+
+  const employees = await Employee.find({
+    companyId,
+
+    companyAccessId: {
+      $in: companyAccessIds,
+    },
+
+    status: "ACTIVE",
+
+    isDeleted: false,
+  })
+    .select("_id companyId companyAccessId userId status")
+    .lean();
+
+  const employeeByAccessId = new Map(
+    employees.map((employee) => [String(employee.companyAccessId), employee]),
+  );
+
+  let employeeAccesses = companyAccesses.filter((access) =>
+    employeeByAccessId.has(String(access._id)),
+  );
+
+  /**
+   * ========================================================
+   * ATTENDANCE FOR REQUESTED DATE
+   * ========================================================
+   */
+
+  const attendanceRecords = await Attendance.find({
+    companyId,
+
+    companyAccessId: {
+      $in: employeeAccesses.map((access) => access._id),
+    },
+
+    attendanceDate: date,
+
+    isDeleted: false,
+  })
+    .populate(attendancePopulate)
+    .lean();
+
+  const attendanceByAccessId = new Map(
+    attendanceRecords.map((attendance) => [
+      String(attendance.companyAccessId?._id || attendance.companyAccessId),
+      attendance,
+    ]),
+  );
+
+  /**
+   * ========================================================
+   * BUILD DAILY SHEET ROWS
+   * ========================================================
+   */
+
+  let rows = employeeAccesses.map((access) => {
+    const employee = employeeByAccessId.get(String(access._id));
+
+    const attendance = attendanceByAccessId.get(String(access._id)) || null;
+
+    const employeeUser = access.userId || null;
+
+    return {
+      companyAccessId: access._id,
+
+      employeeId: employee?._id || null,
+
+      employeeCode: access.employeeCode || "",
+
+      employeeName:
+        employeeUser?.displayName ||
+        [
+          employeeUser?.firstName,
+          employeeUser?.middleName,
+          employeeUser?.lastName,
+        ]
+          .filter(Boolean)
+          .join(" ") ||
+        "Employee",
+
+      designation: access.designation || "",
+
+      departmentId: access.departmentId || null,
+
+      teamId: access.teamId || null,
+
+      shiftId: access.shiftId || null,
+
+      attendanceMode: access.attendanceMode || "OFFICE",
+
+      attendanceLocationId: access.attendanceLocationId || null,
+
+      attendanceDate: date,
+
+      attendanceId: attendance?._id || null,
+
+      attendanceStatus: attendance?.attendanceStatus || "NOT_CHECKED_IN",
+
+      attendance,
+    };
+  });
+
+  /**
+   * ========================================================
+   * STATUS FILTER
+   * ========================================================
+   *
+   * This is applied after merging employees + attendance
+   * because NOT_CHECKED_IN is not stored in Attendance.
+   */
+
+  if (attendanceStatus) {
+    rows = rows.filter((row) => row.attendanceStatus === attendanceStatus);
+  }
+
+  /**
+   * ========================================================
+   * PAGINATION
+   * ========================================================
+   */
+
+  const page = Number(query.page || 1);
+
+  const limit = Number(query.limit || 20);
+
+  const total = rows.length;
+
+  const totalPages = Math.ceil(total / limit);
+
+  const start = (page - 1) * limit;
+
+  const items = rows.slice(start, start + limit);
+
+  return {
+    date,
+
+    items,
+
+    summary: {
+      totalEmployees: rows.length,
+
+      notCheckedIn: rows.filter(
+        (row) => row.attendanceStatus === "NOT_CHECKED_IN",
+      ).length,
+
+      pending: rows.filter((row) => row.attendanceStatus === "PENDING").length,
+
+      present: rows.filter((row) => row.attendanceStatus === "PRESENT").length,
+
+      halfDay: rows.filter((row) => row.attendanceStatus === "HALF_DAY").length,
+
+      absent: rows.filter((row) => row.attendanceStatus === "ABSENT").length,
+    },
+
+    pagination: {
+      page,
+
+      limit,
+
+      total,
+
+      totalPages,
+
+      hasNextPage: page * limit < total,
+
+      hasPreviousPage: page > 1,
+    },
   };
 };
 

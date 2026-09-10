@@ -62,6 +62,11 @@ const locationEvidenceInputSchema = z
   })
   .strict();
 
+const booleanQuerySchema = z
+  .enum(["true", "false"])
+  .transform((value) => value === "true")
+  .optional();
+
 /**
  * ============================================================
  * ROUTE PARAMS
@@ -282,9 +287,9 @@ export const listAttendanceSchema = z.object({
 
       toDate: dateStringSchema.optional(),
 
-      isLate: z.coerce.boolean().optional(),
+      isLate: booleanQuerySchema,
 
-      isEarlyCheckout: z.coerce.boolean().optional(),
+      isEarlyCheckout: booleanQuerySchema,
 
       search: z.string().trim().max(150).optional(),
     })
@@ -337,9 +342,9 @@ export const getMyAttendanceHistorySchema = z.object({
 
       toDate: dateStringSchema.optional(),
 
-      isLate: z.coerce.boolean().optional(),
+      isLate: booleanQuerySchema,
 
-      isEarlyCheckout: z.coerce.boolean().optional(),
+      isEarlyCheckout: booleanQuerySchema,
     })
     .strict()
     .superRefine((data, ctx) => {
@@ -913,8 +918,7 @@ export const createRegularizationSchema = z.object({
 
   body: z
     .object({
-      attendanceId: objectIdSchema.optional().nullable(),
-
+      attendanceId: objectIdSchema,
       targetWorkSessionId: objectIdSchema.optional().nullable(),
 
       targetBreakId: objectIdSchema.optional().nullable(),
@@ -1357,6 +1361,41 @@ export const getFieldVisitSchema = z.object({
   params: fieldVisitIdParamsSchema,
 
   query: emptyQuerySchema,
+
+  body: emptyBodySchema,
+});
+
+export const getDailyAttendanceSummarySchema = z.object({
+  params: attendanceCompanyParamsSchema,
+
+  query: z
+    .object({
+      ...paginationQuerySchema,
+
+      date: dateStringSchema,
+
+      departmentId: objectIdSchema.optional(),
+
+      teamId: objectIdSchema.optional(),
+
+      shiftId: objectIdSchema.optional(),
+
+      attendanceStatus: z
+        .enum([
+          "NOT_CHECKED_IN",
+          "PENDING",
+          "PRESENT",
+          "HALF_DAY",
+          "ABSENT",
+          "ON_LEAVE",
+          "HOLIDAY",
+          "WEEKLY_OFF",
+        ])
+        .optional(),
+
+      search: z.string().trim().max(150).optional(),
+    })
+    .strict(),
 
   body: emptyBodySchema,
 });

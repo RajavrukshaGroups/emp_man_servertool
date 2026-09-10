@@ -28,6 +28,7 @@ import {
   listAttendanceLocationsSchema,
   getAttendanceLocationSchema,
   updateAttendanceLocationSchema,
+  getDailyAttendanceSummarySchema,
 
   // FIELD VISIT
   startFieldVisitSchema,
@@ -57,6 +58,7 @@ import {
   getMyAttendanceHistory,
   listAttendance,
   getAttendance,
+  getDailySummary,
 } from "./attendance.controller.js";
 
 import {
@@ -530,6 +532,22 @@ router.get(
   authorize(PERMISSIONS.ATTENDANCE_READ),
   validate(getRegularizationSchema),
   getRegularizationById,
+);
+
+/**
+ * ============================================================
+ * DAILY ATTENDANCE SUMMARY
+ * ============================================================
+ *
+ * GET
+ * /companies/:companyId/attendance/daily-summary
+ */
+
+router.get(
+  "/daily-summary",
+  authorize(PERMISSIONS.ATTENDANCE_READ),
+  validate(getDailyAttendanceSummarySchema),
+  getDailySummary,
 );
 
 /**

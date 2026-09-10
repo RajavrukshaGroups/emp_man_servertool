@@ -3,6 +3,7 @@ import {
   checkOutAttendance,
   endAttendanceBreak,
   getAttendanceById,
+  getDailyAttendanceSummary,
   getMyAttendanceHistory as getMyAttendanceHistoryService,
   getMyTodayAttendance,
   listAttendances,
@@ -315,6 +316,43 @@ export const getAttendance = async (req, res, next) => {
       statusCode: 200,
 
       message: "Attendance record fetched successfully.",
+
+      data,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * ============================================================
+ * DAILY ATTENDANCE SUMMARY
+ * ============================================================
+ *
+ * GET
+ * /companies/:companyId/attendance/daily-summary
+ */
+
+export const getDailySummary = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const requesterContext = getAttendanceRequesterContext(req);
+
+    const data = await getDailyAttendanceSummary({
+      companyId,
+
+      query: req.validated.query,
+
+      requesterContext,
+    });
+
+    return res.status(200).json({
+      success: true,
+
+      statusCode: 200,
+
+      message: "Daily attendance summary fetched successfully.",
 
       data,
     });
