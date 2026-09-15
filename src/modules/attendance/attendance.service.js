@@ -52,7 +52,7 @@ const attendancePopulate = [
   {
     path: "companyAccessId",
     select:
-      "userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId workLocationType workLocationName status",
+      "userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId attendanceLocationPolicy workLocationType workLocationName status",
     populate: [
       {
         path: "departmentId",
@@ -218,7 +218,7 @@ const resolveSelfAttendanceContext = async ({
     companyId,
     isDeleted: false,
   }).select(
-    "_id userId companyId employeeCode designation departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId workLocationType workLocationName status",
+    "_id userId companyId employeeCode designation departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId attendanceLocationPolicy workLocationType workLocationName status",
   );
 
   if (session) {
@@ -585,6 +585,21 @@ const findDefaultAttendanceLocation = async ({
   return query.lean();
 };
 
+const resolveAttendanceLocationPolicy = ({ companyAccess, action }) => {
+  const configuredPolicy =
+    action === "CHECK_IN"
+      ? companyAccess?.attendanceLocationPolicy?.checkIn
+      : companyAccess?.attendanceLocationPolicy?.checkOut;
+
+  /**
+   * Backward-compatible default.
+   *
+   * Old CompanyAccess records may not physically contain
+   * attendanceLocationPolicy yet.
+   */
+  return configuredPolicy || "GEOFENCE_REQUIRED";
+};
+
 /**
  * ============================================================
  * GPS / GEOFENCE EVIDENCE
@@ -610,18 +625,33 @@ const buildAttendanceLocationEvidence = async ({
   policy,
   locationInput,
   attendanceLocationId = null,
+  attendanceLocationPolicy = "GEOFENCE_REQUIRED",
   action,
   currentTime,
   requestMeta = {},
   session = null,
 }) => {
-  const geofenceRequired = shouldEnforceGeofence(attendanceMode, policy);
-
   /**
-   * Geofence cannot be evaluated without GPS.
+   * Employee-specific attendance location rule.
+   *
+   * GEOFENCE_REQUIRED
+   *   -> GPS mandatory
+   *   -> assigned/default attendance location required
+   *   -> radius must pass
+   *
+   * LOCATION_ONLY
+   *   -> GPS mandatory
+   *   -> location is recorded
+   *   -> geofence radius is NOT enforced
+   *
+   * NOT_REQUIRED
+   *   -> GPS/location evidence is optional
    */
-  const gpsRequired = Boolean(policy.locationRequired) || geofenceRequired;
+  const geofenceRequired = attendanceLocationPolicy === "GEOFENCE_REQUIRED";
 
+  const gpsRequired =
+    attendanceLocationPolicy === "GEOFENCE_REQUIRED" ||
+    attendanceLocationPolicy === "LOCATION_ONLY";
   if (!locationInput) {
     if (gpsRequired) {
       throw new ApiError(
@@ -1169,7 +1199,7 @@ export const getDailyAttendanceSummary = async ({
 
   const companyAccesses = await CompanyAccess.find(accessFilter)
     .select(
-      "_id userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId workLocationType workLocationName status",
+      "_id userId employeeCode designation employmentType departmentId teamId roleId reportingManagerId attendanceMode shiftId attendanceLocationId attendanceLocationPolicy workLocationType workLocationName status",
     )
     .populate([
       {
@@ -1726,7 +1756,19 @@ export const checkInAttendance = async ({
 
       const attendanceMode = companyAccess.attendanceMode || "OFFICE";
 
-      if (attendanceMode === "OFFICE" && !companyAccess.attendanceLocationId) {
+      const attendanceLocationPolicy = resolveAttendanceLocationPolicy({
+        companyAccess,
+        action: "CHECK_IN",
+      });
+
+      /**
+       * An assigned attendance location is mandatory only when
+       * this employee must pass geofence verification.
+       */
+      if (
+        attendanceLocationPolicy === "GEOFENCE_REQUIRED" &&
+        !companyAccess.attendanceLocationId
+      ) {
         throw new ApiError(
           409,
           "No attendance location has been assigned to this employee. Please contact the administrator.",
@@ -1743,6 +1785,8 @@ export const checkInAttendance = async ({
         locationInput: data.location || null,
 
         attendanceLocationId: companyAccess.attendanceLocationId || null,
+
+        attendanceLocationPolicy,
 
         action: "CHECK_IN",
 
@@ -2223,13 +2267,20 @@ export const checkOutAttendance = async ({
       const attendanceMode =
         companyAccess.attendanceMode || attendance.attendanceMode || "OFFICE";
 
-      if (attendanceMode === "OFFICE" && !companyAccess.attendanceLocationId) {
+      const attendanceLocationPolicy = resolveAttendanceLocationPolicy({
+        companyAccess,
+        action: "CHECK_OUT",
+      });
+
+      if (
+        attendanceLocationPolicy === "GEOFENCE_REQUIRED" &&
+        !companyAccess.attendanceLocationId
+      ) {
         throw new ApiError(
           409,
           "No attendance location has been assigned to this employee. Please contact the administrator.",
         );
       }
-
       const locationEvidence = await buildAttendanceLocationEvidence({
         companyId,
 
@@ -2240,6 +2291,8 @@ export const checkOutAttendance = async ({
         locationInput: data.location || null,
 
         attendanceLocationId: companyAccess.attendanceLocationId || null,
+
+        attendanceLocationPolicy,
 
         action: "CHECK_OUT",
 

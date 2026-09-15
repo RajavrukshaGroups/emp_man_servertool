@@ -443,6 +443,16 @@ export const createCompanyAccess = async (
 
             attendanceLocationId: accessData.attendanceLocationId ?? null,
 
+            attendanceLocationPolicy: {
+              checkIn:
+                accessData.attendanceLocationPolicy?.checkIn ??
+                "GEOFENCE_REQUIRED",
+
+              checkOut:
+                accessData.attendanceLocationPolicy?.checkOut ??
+                "GEOFENCE_REQUIRED",
+            },
+
             isPrimaryCompany: accessData.isPrimaryCompany ?? false,
 
             status: accessData.status ?? "ONBOARDING",
@@ -761,6 +771,22 @@ export const updateCompanyAccess = async (
         if (updateData[field] !== undefined) {
           access[field] = updateData[field];
         }
+      }
+
+      if (updateData.attendanceLocationPolicy !== undefined) {
+        const currentPolicy = access.attendanceLocationPolicy ?? {};
+
+        access.attendanceLocationPolicy = {
+          checkIn:
+            updateData.attendanceLocationPolicy.checkIn ??
+            currentPolicy.checkIn ??
+            "GEOFENCE_REQUIRED",
+
+          checkOut:
+            updateData.attendanceLocationPolicy.checkOut ??
+            currentPolicy.checkOut ??
+            "GEOFENCE_REQUIRED",
+        };
       }
 
       if (updateData.employeeCode !== undefined) {

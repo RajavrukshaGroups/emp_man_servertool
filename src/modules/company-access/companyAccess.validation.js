@@ -30,6 +30,19 @@ const workLocationTypes = [
 ];
 
 const attendanceModes = ["OFFICE", "FIELD", "HYBRID", "REMOTE"];
+
+const attendanceLocationPolicyTypes = [
+  "GEOFENCE_REQUIRED",
+  "LOCATION_ONLY",
+  "NOT_REQUIRED",
+];
+
+const attendanceLocationPolicySchema = z
+  .object({
+    checkIn: z.enum(attendanceLocationPolicyTypes).optional(),
+    checkOut: z.enum(attendanceLocationPolicyTypes).optional(),
+  })
+  .strict();
 const optionalText = (maximumLength, fieldName = "Text") =>
   z
     .string()
@@ -146,6 +159,13 @@ const createCompanyAccessBodySchema = z
 
     attendanceLocationId: nullableObjectIdSchema,
 
+    attendanceLocationPolicy: attendanceLocationPolicySchema
+      .optional()
+      .default({
+        checkIn: "GEOFENCE_REQUIRED",
+        checkOut: "GEOFENCE_REQUIRED",
+      }),
+
     isPrimaryCompany: z.boolean().default(false),
 
     status: z.enum(companyAccessStatuses).default("ONBOARDING"),
@@ -209,6 +229,8 @@ const updateCompanyAccessBodySchema = z
     shiftId: nullableObjectIdSchema,
 
     attendanceLocationId: nullableObjectIdSchema,
+
+    attendanceLocationPolicy: attendanceLocationPolicySchema.optional(),
 
     isPrimaryCompany: z.boolean().optional(),
 

@@ -543,9 +543,16 @@ router.get(
  * /companies/:companyId/attendance/daily-summary
  */
 
+// router.get(
+//   "/daily-summary",
+//   authorize(PERMISSIONS.ATTENDANCE_READ),
+//   validate(getDailyAttendanceSummarySchema),
+//   getDailySummary,
+// );
+
 router.get(
   "/daily-summary",
-  authorize(PERMISSIONS.ATTENDANCE_READ),
+  authorize(PERMISSIONS.ATTENDANCE_SUMMARY_READ),
   validate(getDailyAttendanceSummarySchema),
   getDailySummary,
 );

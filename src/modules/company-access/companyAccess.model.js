@@ -150,6 +150,20 @@ const companyAccessSchema = new mongoose.Schema(
       index: true,
     },
 
+    attendanceLocationPolicy: {
+      checkIn: {
+        type: String,
+        enum: ["GEOFENCE_REQUIRED", "LOCATION_ONLY", "NOT_REQUIRED"],
+        default: "GEOFENCE_REQUIRED",
+      },
+
+      checkOut: {
+        type: String,
+        enum: ["GEOFENCE_REQUIRED", "LOCATION_ONLY", "NOT_REQUIRED"],
+        default: "GEOFENCE_REQUIRED",
+      },
+    },
+
     isPrimaryCompany: {
       type: Boolean,
       default: false,

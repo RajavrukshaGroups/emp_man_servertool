@@ -25,6 +25,7 @@ const accessPopulate = [
     path: "companyId",
     select: "name slug code logo status",
   },
+
   {
     path: "roleId",
     select: "name code description scopeType status permissionIds",
@@ -32,6 +33,12 @@ const accessPopulate = [
       path: "permissionIds",
       select: "name code module action description status",
     },
+  },
+
+  {
+    path: "attendanceLocationId",
+    select:
+      "name code locationType latitude longitude geofenceRadiusMeters allowCheckIn allowCheckOut status",
   },
 ];
 
@@ -380,7 +387,53 @@ const buildAuthenticationResponse = ({ user, companyAccess, accessToken }) => {
       workLocationName: companyAccess.workLocationName,
 
       attendanceMode: companyAccess.attendanceMode,
+
       shiftId: companyAccess.shiftId,
+
+      attendanceLocationId:
+        companyAccess.attendanceLocationId?._id ??
+        companyAccess.attendanceLocationId ??
+        null,
+
+      attendanceLocation: companyAccess.attendanceLocationId
+        ? {
+            _id:
+              companyAccess.attendanceLocationId?._id ??
+              companyAccess.attendanceLocationId,
+
+            name: companyAccess.attendanceLocationId?.name ?? "",
+
+            code: companyAccess.attendanceLocationId?.code ?? "",
+
+            locationType:
+              companyAccess.attendanceLocationId?.locationType ?? null,
+
+            latitude: companyAccess.attendanceLocationId?.latitude ?? null,
+
+            longitude: companyAccess.attendanceLocationId?.longitude ?? null,
+
+            geofenceRadiusMeters:
+              companyAccess.attendanceLocationId?.geofenceRadiusMeters ?? null,
+
+            allowCheckIn:
+              companyAccess.attendanceLocationId?.allowCheckIn ?? false,
+
+            allowCheckOut:
+              companyAccess.attendanceLocationId?.allowCheckOut ?? false,
+
+            status: companyAccess.attendanceLocationId?.status ?? null,
+          }
+        : null,
+
+      attendanceLocationPolicy: {
+        checkIn:
+          companyAccess.attendanceLocationPolicy?.checkIn ??
+          "GEOFENCE_REQUIRED",
+
+        checkOut:
+          companyAccess.attendanceLocationPolicy?.checkOut ??
+          "GEOFENCE_REQUIRED",
+      },
 
       isPrimaryCompany: companyAccess.isPrimaryCompany,
       status: companyAccess.status,
@@ -592,17 +645,17 @@ export const login = async ({
     validateBeforeSave: false,
   });
 
-  return {
-    data: buildAuthenticationResponse({
-      user,
-      companyAccess,
-      accessToken: tokens.accessToken,
-    }),
+  // return {
+  //   data: buildAuthenticationResponse({
+  //     user,
+  //     companyAccess,
+  //     accessToken: tokens.accessToken,
+  //   }),
 
-    refreshToken: tokens.refreshToken,
+  //   refreshToken: tokens.refreshToken,
 
-    refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
-  };
+  //   refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+  // };
 };
 
 /**
