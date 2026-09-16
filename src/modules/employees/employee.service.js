@@ -19,7 +19,7 @@ const employeePopulateOptions = [
     path: "companyAccessId",
 
     select:
-      "employeeCode designation employmentType departmentId teamId roleId reportingManagerId joiningDate probationEndDate lastWorkingDate workLocationType workLocationName attendanceMode shiftId status",
+      "employeeCode designation employmentType departmentId teamId roleId reportingManagerId joiningDate probationEndDate lastWorkingDate workLocationType workLocationName attendanceMode shiftId attendanceLocationId attendanceLocationPolicy status",
 
     populate: [
       {
