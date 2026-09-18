@@ -150,6 +150,64 @@ const attendancePolicySchema = new mongoose.Schema(
 
     /**
      * ========================================================
+     * SCHEDULE COMPENSATION
+     * ========================================================
+     *
+     * Compensation never removes the original late-arrival or
+     * early-checkout evidence.
+     *
+     * Example:
+     *
+     * Shift: 08:00 -> 17:00
+     *
+     * 08:25 -> 17:25
+     * Late arrival remains recorded.
+     * Post-shift work may compensate the late minutes.
+     *
+     * 07:00 -> 16:00
+     * Early checkout remains recorded.
+     * Pre-shift work may compensate the early-checkout minutes.
+     */
+
+    scheduleCompensationEnabled: {
+      type: Boolean,
+      default: true,
+    },
+
+    /**
+     * Allow work performed after scheduled shift end to
+     * compensate for late arrival.
+     */
+    allowPostShiftWorkForLateArrival: {
+      type: Boolean,
+      default: true,
+    },
+
+    /**
+     * Allow work performed before scheduled shift start to
+     * compensate for early checkout.
+     */
+    allowPreShiftWorkForEarlyCheckout: {
+      type: Boolean,
+      default: true,
+    },
+
+    /**
+     * Optional safety limit.
+     *
+     * Example:
+     * 120 means at most 2 hours of pre/post-shift work may
+     * participate in schedule compensation.
+     */
+    maximumCompensationMinutes: {
+      type: Number,
+      default: 120,
+      min: [0, "Maximum compensation minutes cannot be negative."],
+      max: [720, "Maximum compensation minutes cannot exceed 720 minutes."],
+    },
+
+    /**
+     * ========================================================
      * MISSING CHECKOUT
      * ========================================================
      */
@@ -274,7 +332,6 @@ const attendancePolicySchema = new mongoose.Schema(
      * Require location evidence when starting or ending
      * a field/client visit.
      */
-    
 
     /**
      * Require employee to give a purpose before starting

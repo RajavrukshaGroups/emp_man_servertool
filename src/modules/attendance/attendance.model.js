@@ -480,6 +480,36 @@ const attendanceSchema = new mongoose.Schema(
     },
 
     /**
+     * Snapshot the schedule-compensation rules used for this
+     * attendance day.
+     *
+     * Historical attendance must not change merely because the
+     * company's attendance policy changes later.
+     */
+    compensationPolicySnapshot: {
+      scheduleCompensationEnabled: {
+        type: Boolean,
+        default: true,
+      },
+
+      allowPostShiftWorkForLateArrival: {
+        type: Boolean,
+        default: true,
+      },
+
+      allowPreShiftWorkForEarlyCheckout: {
+        type: Boolean,
+        default: true,
+      },
+
+      maximumCompensationMinutes: {
+        type: Number,
+        default: 120,
+        min: 0,
+      },
+    },
+
+    /**
      * Snapshot the employee attendance mode for this day.
      *
      * Later changes to CompanyAccess must not alter history.
@@ -554,6 +584,44 @@ const attendanceSchema = new mongoose.Schema(
     isEarlyCheckout: {
       type: Boolean,
       default: false,
+    },
+
+    /**
+     * ========================================================
+     * SCHEDULE COMPENSATION
+     * ========================================================
+     *
+     * IMPORTANT:
+     *
+     * Compensation does NOT erase the original schedule
+     * deviation.
+     *
+     * isLate / lateMinutes and
+     * isEarlyCheckout / earlyCheckoutMinutes
+     *
+     * always preserve what actually happened.
+     */
+
+    isLateCompensated: {
+      type: Boolean,
+      default: false,
+    },
+
+    lateCompensatedMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    isEarlyCheckoutCompensated: {
+      type: Boolean,
+      default: false,
+    },
+
+    earlyCheckoutCompensatedMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     /**

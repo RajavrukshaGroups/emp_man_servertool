@@ -642,6 +642,209 @@ export const determineWorkedAttendanceStatus = ({
 
 /**
  * ============================================================
+ * SCHEDULE COMPENSATION
+ * ============================================================
+ */
+
+/**
+ * Calculates how many worked minutes occurred inside a
+ * particular time window.
+ *
+ * Only CLOSED work sessions participate because an open
+ * session does not yet have a final duration.
+ */
+export const calculateWorkedMinutesInsideWindow = ({
+  workSessions = [],
+  breaks = [],
+  windowStart,
+  windowEnd,
+}) => {
+  const startBoundary = toDate(windowStart);
+  const endBoundary = toDate(windowEnd);
+
+  if (!startBoundary || !endBoundary || endBoundary <= startBoundary) {
+    return 0;
+  }
+
+  /**
+   * Calculate gross worked time overlapping the requested
+   * compensation window.
+   */
+  const grossWorkedMinutes = workSessions.reduce((total, session) => {
+    const sessionStart = toDate(session.checkInAt);
+    const sessionEnd = toDate(session.checkOutAt);
+
+    if (!sessionStart || !sessionEnd) {
+      return total;
+    }
+
+    const overlapStart = new Date(
+      Math.max(sessionStart.getTime(), startBoundary.getTime()),
+    );
+
+    const overlapEnd = new Date(
+      Math.min(sessionEnd.getTime(), endBoundary.getTime()),
+    );
+
+    if (overlapEnd <= overlapStart) {
+      return total;
+    }
+
+    return total + calculateMinutesBetween(overlapStart, overlapEnd);
+  }, 0);
+
+  /**
+   * Calculate completed break time overlapping the same
+   * compensation window.
+   */
+  const breakMinutes = breaks.reduce((total, breakItem) => {
+    const breakStart = toDate(breakItem.startedAt);
+    const breakEnd = toDate(breakItem.endedAt);
+
+    if (!breakStart || !breakEnd) {
+      return total;
+    }
+
+    const overlapStart = new Date(
+      Math.max(breakStart.getTime(), startBoundary.getTime()),
+    );
+
+    const overlapEnd = new Date(
+      Math.min(breakEnd.getTime(), endBoundary.getTime()),
+    );
+
+    if (overlapEnd <= overlapStart) {
+      return total;
+    }
+
+    return total + calculateMinutesBetween(overlapStart, overlapEnd);
+  }, 0);
+
+  return Math.max(0, grossWorkedMinutes - breakMinutes);
+};
+
+/**
+ * Calculate schedule-deviation compensation.
+ *
+ * Raw late/early evidence remains untouched.
+ */
+export const calculateScheduleCompensation = ({
+  workSessions = [],
+  breaks = [],
+
+  shiftStart,
+  shiftEnd,
+
+  lateMinutes = 0,
+  earlyCheckoutMinutes = 0,
+
+  compensationPolicy = {},
+}) => {
+  const enabled = compensationPolicy.scheduleCompensationEnabled !== false;
+
+  if (!enabled) {
+    return {
+      isLateCompensated: false,
+      lateCompensatedMinutes: 0,
+
+      isEarlyCheckoutCompensated: false,
+      earlyCheckoutCompensatedMinutes: 0,
+    };
+  }
+
+  const maximumCompensationMinutes = Math.max(
+    0,
+    Number(compensationPolicy.maximumCompensationMinutes || 0),
+  );
+
+  const effectiveMaximum =
+    maximumCompensationMinutes > 0
+      ? maximumCompensationMinutes
+      : Number.MAX_SAFE_INTEGER;
+
+  /**
+   * ------------------------------------------
+   * LATE ARRIVAL
+   * ------------------------------------------
+   *
+   * Only work performed AFTER scheduled shift end
+   * can compensate late arrival.
+   */
+
+  let lateCompensatedMinutes = 0;
+
+  if (
+    lateMinutes > 0 &&
+    compensationPolicy.allowPostShiftWorkForLateArrival !== false
+  ) {
+    const lastCheckout = getLastCheckOutAt(workSessions);
+
+    if (lastCheckout && shiftEnd && lastCheckout > shiftEnd) {
+      const postShiftWorkedMinutes = calculateWorkedMinutesInsideWindow({
+        workSessions,
+        breaks,
+        windowStart: shiftEnd,
+        windowEnd: lastCheckout,
+      });
+
+      lateCompensatedMinutes = Math.min(
+        Number(lateMinutes),
+        postShiftWorkedMinutes,
+        effectiveMaximum,
+      );
+    }
+  }
+
+  /**
+   * ------------------------------------------
+   * EARLY CHECKOUT
+   * ------------------------------------------
+   *
+   * Only work performed BEFORE scheduled shift start
+   * can compensate early checkout.
+   */
+
+  let earlyCheckoutCompensatedMinutes = 0;
+
+  if (
+    earlyCheckoutMinutes > 0 &&
+    compensationPolicy.allowPreShiftWorkForEarlyCheckout !== false
+  ) {
+    const firstCheckIn = getFirstCheckInAt(workSessions);
+
+    if (firstCheckIn && shiftStart && firstCheckIn < shiftStart) {
+      const preShiftWorkedMinutes = calculateWorkedMinutesInsideWindow({
+        workSessions,
+        breaks,
+
+        windowStart: firstCheckIn,
+        windowEnd: shiftStart,
+      });
+
+      earlyCheckoutCompensatedMinutes = Math.min(
+        Number(earlyCheckoutMinutes),
+        preShiftWorkedMinutes,
+        effectiveMaximum,
+      );
+    }
+  }
+
+  return {
+    isLateCompensated:
+      Number(lateMinutes) > 0 && lateCompensatedMinutes >= Number(lateMinutes),
+
+    lateCompensatedMinutes,
+
+    isEarlyCheckoutCompensated:
+      Number(earlyCheckoutMinutes) > 0 &&
+      earlyCheckoutCompensatedMinutes >= Number(earlyCheckoutMinutes),
+
+    earlyCheckoutCompensatedMinutes,
+  };
+};
+
+/**
+ * ============================================================
  * RECALCULATE ATTENDANCE TOTALS
  * ============================================================
  *
@@ -655,6 +858,7 @@ export const calculateAttendanceTotals = ({
   workSessions = [],
   breaks = [],
   shiftSnapshot,
+  compensationPolicySnapshot = {},
   attendanceDate,
   timezone = "Asia/Kolkata",
 }) => {
@@ -671,10 +875,23 @@ export const calculateAttendanceTotals = ({
     grossWorkedMinutes - totalBreakMinutes,
   );
 
+  /**
+   * Schedule adherence evidence.
+   */
   let lateMinutes = 0;
   let isLate = false;
+
   let earlyCheckoutMinutes = 0;
   let isEarlyCheckout = false;
+
+  /**
+   * Schedule compensation evidence.
+   */
+  let isLateCompensated = false;
+  let lateCompensatedMinutes = 0;
+
+  let isEarlyCheckoutCompensated = false;
+  let earlyCheckoutCompensatedMinutes = 0;
 
   if (
     shiftSnapshot &&
@@ -684,35 +901,95 @@ export const calculateAttendanceTotals = ({
   ) {
     const { shiftStart, shiftEnd } = getShiftBoundaries({
       attendanceDate,
+
       startTime: shiftSnapshot.startTime,
+
       endTime: shiftSnapshot.endTime,
+
       isOvernight: shiftSnapshot.isOvernight || false,
+
       timezone,
     });
 
+    /**
+     * ----------------------------------------
+     * LATE ARRIVAL
+     * ----------------------------------------
+     */
+
     const lateResult = calculateLateMinutes({
       firstCheckInAt,
+
       shiftStart,
+
       graceMinutes: shiftSnapshot.lateGraceMinutes || 0,
     });
 
     lateMinutes = lateResult.lateMinutes;
+
     isLate = lateResult.isLate;
+
+    /**
+     * ----------------------------------------
+     * EARLY CHECKOUT
+     * ----------------------------------------
+     */
 
     const earlyResult = calculateEarlyCheckoutMinutes({
       lastCheckOutAt,
+
       shiftEnd,
+
       graceMinutes: shiftSnapshot.earlyCheckoutGraceMinutes || 0,
     });
 
     earlyCheckoutMinutes = earlyResult.earlyCheckoutMinutes;
 
     isEarlyCheckout = earlyResult.isEarlyCheckout;
+
+    /**
+     * ----------------------------------------
+     * SCHEDULE COMPENSATION
+     * ----------------------------------------
+     *
+     * Calculate compensation only after both
+     * schedule deviations are known.
+     */
+
+    const compensationResult = calculateScheduleCompensation({
+      workSessions,
+      breaks,
+
+      shiftStart,
+      shiftEnd,
+
+      lateMinutes,
+      earlyCheckoutMinutes,
+
+      compensationPolicy: compensationPolicySnapshot,
+    });
+
+    isLateCompensated = compensationResult.isLateCompensated;
+
+    lateCompensatedMinutes = compensationResult.lateCompensatedMinutes;
+
+    isEarlyCheckoutCompensated = compensationResult.isEarlyCheckoutCompensated;
+
+    earlyCheckoutCompensatedMinutes =
+      compensationResult.earlyCheckoutCompensatedMinutes;
   }
 
+  /**
+   * Attendance classification remains based on
+   * actual NET worked minutes.
+   *
+   * Compensation does not falsify worked time.
+   */
   const attendanceStatus = determineWorkedAttendanceStatus({
     workedMinutes: totalWorkedMinutes,
+
     fullDayMinutes: shiftSnapshot?.fullDayMinutes || 0,
+
     halfDayMinutes: shiftSnapshot?.halfDayMinutes || 0,
   });
 
@@ -729,6 +1006,12 @@ export const calculateAttendanceTotals = ({
 
     earlyCheckoutMinutes,
     isEarlyCheckout,
+
+    isLateCompensated,
+    lateCompensatedMinutes,
+
+    isEarlyCheckoutCompensated,
+    earlyCheckoutCompensatedMinutes,
 
     attendanceStatus,
   };

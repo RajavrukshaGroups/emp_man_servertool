@@ -9,6 +9,7 @@ import Employee from "../employees/employee.model.js";
 import Attendance from "./attendance.model.js";
 import AttendanceLocation from "./attendanceLocation.model.js";
 import AttendancePolicy from "./attendancePolicy.model.js";
+
 import Shift from "./shift.model.js";
 import FieldVisit from "./fieldVisit.model.js";
 
@@ -86,7 +87,7 @@ const attendancePopulate = [
   {
     path: "attendancePolicyId",
     select:
-      "name code locationRequired maximumAcceptedAccuracyMeters enforceGeofenceForOffice enforceGeofenceForHybrid enforceGeofenceForField enforceGeofenceForRemote allowMultipleWorkSessions allowReCheckInSameDay preventOverlappingSessions missingCheckoutAction autoCloseAfterMinutes maximumOpenSessionMinutes allowNextDayCheckInWithPendingPreviousDay regularizationEnabled status",
+      "name code locationRequired maximumAcceptedAccuracyMeters enforceGeofenceForOffice enforceGeofenceForHybrid enforceGeofenceForField enforceGeofenceForRemote allowMultipleWorkSessions allowReCheckInSameDay preventOverlappingSessions scheduleCompensationEnabled allowPostShiftWorkForLateArrival allowPreShiftWorkForEarlyCheckout maximumCompensationMinutes missingCheckoutAction autoCloseAfterMinutes maximumOpenSessionMinutes allowNextDayCheckInWithPendingPreviousDay regularizationEnabled status",
   },
   {
     path: "workSessions.checkInLocation.attendanceLocationId",
@@ -367,6 +368,28 @@ const createShiftSnapshot = (shift) => ({
 
   allowMultipleBreaks: shift.allowMultipleBreaks !== false,
 });
+
+const createCompensationPolicySnapshot = (policy) => {
+  const maximumCompensationMinutes = Number(
+    policy?.maximumCompensationMinutes ?? 0,
+  );
+
+  return {
+    scheduleCompensationEnabled: policy?.scheduleCompensationEnabled !== false,
+
+    allowPostShiftWorkForLateArrival:
+      policy?.allowPostShiftWorkForLateArrival !== false,
+
+    allowPreShiftWorkForEarlyCheckout:
+      policy?.allowPreShiftWorkForEarlyCheckout !== false,
+
+    maximumCompensationMinutes:
+      Number.isFinite(maximumCompensationMinutes) &&
+      maximumCompensationMinutes >= 0
+        ? maximumCompensationMinutes
+        : 0,
+  };
+};
 
 /**
  * ============================================================
@@ -844,6 +867,133 @@ const findOpenAttendance = async ({
   return query;
 };
 
+const findCurrentDayOpenAttendance = async ({
+  companyId,
+  companyAccessId,
+  attendanceDate,
+  session = null,
+}) => {
+  let query = Attendance.findOne({
+    companyId,
+    companyAccessId,
+    attendanceDate,
+    isDeleted: false,
+
+    workSessions: {
+      $elemMatch: {
+        status: "OPEN",
+        checkOutAt: null,
+      },
+    },
+  });
+
+  if (session) {
+    query = query.session(session);
+  }
+
+  return query;
+};
+
+const findActionableOpenAttendance = async ({
+  companyId,
+  companyAccessId,
+  currentTime,
+  timezone,
+  session = null,
+}) => {
+  const currentAttendanceDate = getAttendanceDateInTimezone(
+    currentTime,
+    timezone,
+  );
+
+  let query = Attendance.find({
+    companyId,
+    companyAccessId,
+    isDeleted: false,
+
+    workSessions: {
+      $elemMatch: {
+        status: "OPEN",
+        checkOutAt: null,
+      },
+    },
+  }).sort({
+    attendanceDate: -1,
+    createdAt: -1,
+  });
+
+  if (session) {
+    query = query.session(session);
+  }
+
+  const openAttendances = await query;
+
+  if (!openAttendances.length) {
+    return null;
+  }
+
+  /**
+   * 1. Today's OPEN attendance always has priority.
+   */
+  const currentDayAttendance = openAttendances.find(
+    (attendance) => attendance.attendanceDate === currentAttendanceDate,
+  );
+
+  if (currentDayAttendance) {
+    return currentDayAttendance;
+  }
+
+  /**
+   * 2. Otherwise allow only a legitimate overnight attendance
+   * from the immediately previous attendance date.
+   *
+   * Example:
+   * check-in: 2026-09-16 22:00
+   * checkout: 2026-09-17 06:00
+   */
+  const previousAttendance = openAttendances[0];
+
+  if (!previousAttendance?.shiftSnapshot?.isOvernight) {
+    return null;
+  }
+
+  const openSession = getOpenWorkSession(previousAttendance);
+
+  if (!openSession) {
+    return null;
+  }
+
+  /**
+   * Safety guard:
+   * An overnight session should not remain actionable forever.
+   *
+   * maximumOpenSessionMinutes comes from the attendance policy
+   * linked to this attendance record.
+   */
+  const policy = await resolveAttendancePolicyById({
+    companyId,
+    policyId: previousAttendance.attendancePolicyId,
+    session,
+  });
+
+  const maximumOpenSessionMinutes = Number(
+    policy.maximumOpenSessionMinutes || 0,
+  );
+
+  if (maximumOpenSessionMinutes > 0) {
+    const openMinutes = Math.floor(
+      (currentTime.getTime() - new Date(openSession.checkInAt).getTime()) /
+        (60 * 1000),
+    );
+
+    if (openMinutes > maximumOpenSessionMinutes) {
+      return null;
+    }
+  }
+
+  return previousAttendance;
+};
+
 /**
  * ============================================================
  * PREVIOUS MISSING CHECKOUT
@@ -929,6 +1079,8 @@ export const recalculateAttendance = async ({
 
     shiftSnapshot: attendance.shiftSnapshot,
 
+    compensationPolicySnapshot: attendance.compensationPolicySnapshot || {},
+
     attendanceDate: attendance.attendanceDate,
 
     timezone,
@@ -949,6 +1101,15 @@ export const recalculateAttendance = async ({
   attendance.isLate = result.isLate;
 
   attendance.isEarlyCheckout = result.isEarlyCheckout;
+
+  attendance.isLateCompensated = result.isLateCompensated;
+
+  attendance.lateCompensatedMinutes = result.lateCompensatedMinutes;
+
+  attendance.isEarlyCheckoutCompensated = result.isEarlyCheckoutCompensated;
+
+  attendance.earlyCheckoutCompensatedMinutes =
+    result.earlyCheckoutCompensatedMinutes;
 
   attendance.attendanceStatus = result.attendanceStatus;
 
@@ -1729,6 +1890,18 @@ export const checkInAttendance = async ({
       /**
        * Check for an older forgotten/open attendance.
        */
+      /**
+       * ============================================================
+       * PREVIOUS OPEN ATTENDANCE
+       * ============================================================
+       *
+       * If an older attendance still has an OPEN work session:
+       *
+       * - policy false -> validatePreviousOpenAttendance() blocks
+       * - policy true  -> previous attendance is flagged with
+       *                   MISSING_CHECKOUT + RECALCULATION_REQUIRED,
+       *                   but today's check-in may continue.
+       */
       await validatePreviousOpenAttendance({
         companyId,
         companyAccessId: companyAccess._id,
@@ -1738,22 +1911,30 @@ export const checkInAttendance = async ({
       });
 
       /**
-       * Current open attendance always blocks another
-       * simultaneous work session.
+       * ============================================================
+       * CURRENT-DAY OPEN ATTENDANCE
+       * ============================================================
+       *
+       * We must still prevent two simultaneous sessions for
+       * the SAME attendance date.
+       *
+       * Do NOT use findOpenAttendance() here because that helper
+       * intentionally searches across all dates (including older
+       * forgotten sessions).
        */
-      const openAttendance = await findOpenAttendance({
+      const currentDayOpenAttendance = await findCurrentDayOpenAttendance({
         companyId,
         companyAccessId: companyAccess._id,
+        attendanceDate,
         session,
       });
 
-      if (openAttendance) {
+      if (currentDayOpenAttendance) {
         throw new ApiError(
           409,
-          "You already have an active attendance session.",
+          "You already have an active attendance session for today.",
         );
       }
-
       const attendanceMode = companyAccess.attendanceMode || "OFFICE";
 
       const attendanceLocationPolicy = resolveAttendanceLocationPolicy({
@@ -1830,6 +2011,9 @@ export const checkInAttendance = async ({
 
               shiftSnapshot: createShiftSnapshot(shift),
 
+              compensationPolicySnapshot:
+                createCompensationPolicySnapshot(policy),
+
               attendanceMode: companyAccess.attendanceMode || "OFFICE",
 
               workSessions: [
@@ -1869,6 +2053,14 @@ export const checkInAttendance = async ({
               isLate: false,
 
               isEarlyCheckout: false,
+
+              isLateCompensated: false,
+
+              lateCompensatedMinutes: 0,
+
+              isEarlyCheckoutCompensated: false,
+
+              earlyCheckoutCompensatedMinutes: 0,
 
               attendanceStatus: "PENDING",
 
@@ -1998,7 +2190,9 @@ export const startAttendanceBreak = async ({
     let result;
 
     await session.withTransaction(async () => {
-      await resolveAttendanceCompany(companyId, session);
+      const currentTime = new Date();
+
+      const company = await resolveAttendanceCompany(companyId, session);
 
       const { companyAccess } = await resolveSelfAttendanceContext({
         companyId,
@@ -2006,16 +2200,17 @@ export const startAttendanceBreak = async ({
         session,
       });
 
-      const attendance = await findOpenAttendance({
+      const attendance = await findActionableOpenAttendance({
         companyId,
         companyAccessId: companyAccess._id,
+        currentTime,
+        timezone: company.timezone || "Asia/Kolkata",
         session,
       });
 
       if (!attendance) {
         throw new ApiError(409, "You must check in before starting a break.");
       }
-
       if (attendance.payrollStatus === "FINALIZED") {
         throw new ApiError(
           409,
@@ -2110,7 +2305,9 @@ export const endAttendanceBreak = async ({
     let result;
 
     await session.withTransaction(async () => {
-      await resolveAttendanceCompany(companyId, session);
+      const currentTime = new Date();
+
+      const company = await resolveAttendanceCompany(companyId, session);
 
       const { companyAccess } = await resolveSelfAttendanceContext({
         companyId,
@@ -2118,9 +2315,11 @@ export const endAttendanceBreak = async ({
         session,
       });
 
-      const attendance = await findOpenAttendance({
+      const attendance = await findActionableOpenAttendance({
         companyId,
         companyAccessId: companyAccess._id,
+        currentTime,
+        timezone: company.timezone || "Asia/Kolkata",
         session,
       });
 
@@ -2134,8 +2333,6 @@ export const endAttendanceBreak = async ({
         throw new ApiError(409, "There is no active break to end.");
       }
 
-      const currentTime = new Date();
-
       activeBreak.endedAt = currentTime;
 
       activeBreak.durationMinutes = calculateBreakDurationMinutes(activeBreak);
@@ -2143,7 +2340,6 @@ export const endAttendanceBreak = async ({
       activeBreak.endNotes = data.notes ?? "";
 
       activeBreak.status = "COMPLETED";
-
       attendance.totalBreakMinutes = calculateTotalBreakMinutes(
         attendance.breaks,
       );
@@ -2210,9 +2406,11 @@ export const checkOutAttendance = async ({
         session,
       });
 
-      const attendance = await findOpenAttendance({
+      const attendance = await findActionableOpenAttendance({
         companyId,
         companyAccessId: companyAccess._id,
+        currentTime,
+        timezone: company.timezone || "Asia/Kolkata",
         session,
       });
 
