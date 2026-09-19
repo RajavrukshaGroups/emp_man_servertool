@@ -48,6 +48,19 @@ export const calculateMinutesBetween = (start, end) => {
   );
 };
 
+const calculateMillisecondsBetween = (start, end) => {
+  const startDate = toDate(start);
+  const endDate = toDate(end);
+
+  if (!startDate || !endDate || endDate <= startDate) {
+    return 0;
+  }
+
+  return endDate.getTime() - startDate.getTime();
+};
+
+const millisecondsToMinutes = (milliseconds) =>
+  Math.floor(Math.max(0, milliseconds) / MILLISECONDS_PER_MINUTE);
 /**
  * ============================================================
  * COMPANY TIMEZONE
@@ -450,15 +463,25 @@ export const calculateSessionWorkedMinutes = (session) => {
     return 0;
   }
 
-  return calculateMinutesBetween(session.checkInAt, session.checkOutAt);
+  return millisecondsToMinutes(
+    calculateMillisecondsBetween(session.checkInAt, session.checkOutAt),
+  );
 };
 
-export const calculateGrossWorkedMinutes = (workSessions = []) =>
-  workSessions.reduce(
-    (total, session) => total + calculateSessionWorkedMinutes(session),
-    0,
-  );
+const calculateGrossWorkedMilliseconds = (workSessions = []) =>
+  workSessions.reduce((total, session) => {
+    if (!session?.checkInAt || !session?.checkOutAt) {
+      return total;
+    }
 
+    return (
+      total +
+      calculateMillisecondsBetween(session.checkInAt, session.checkOutAt)
+    );
+  }, 0);
+
+export const calculateGrossWorkedMinutes = (workSessions = []) =>
+  millisecondsToMinutes(calculateGrossWorkedMilliseconds(workSessions));
 /**
  * ============================================================
  * BREAK HELPERS
@@ -485,13 +508,141 @@ export const calculateBreakDurationMinutes = (breakItem) => {
     return 0;
   }
 
-  return calculateMinutesBetween(breakItem.startedAt, breakItem.endedAt);
+  return millisecondsToMinutes(
+    calculateMillisecondsBetween(breakItem.startedAt, breakItem.endedAt),
+  );
 };
 
+const calculateTotalBreakMilliseconds = (breaks = []) =>
+  breaks.reduce((total, breakItem) => {
+    if (!breakItem?.startedAt || !breakItem?.endedAt) {
+      return total;
+    }
+
+    return (
+      total +
+      calculateMillisecondsBetween(breakItem.startedAt, breakItem.endedAt)
+    );
+  }, 0);
+
 export const calculateTotalBreakMinutes = (breaks = []) =>
-  breaks.reduce(
-    (total, breakItem) => total + calculateBreakDurationMinutes(breakItem),
-    0,
+  millisecondsToMinutes(calculateTotalBreakMilliseconds(breaks));
+
+/**
+ * Calculates only break time that actually overlaps
+ * a valid CLOSED work session.
+ *
+ * This prevents malformed/imported/admin-adjusted break data
+ * outside working sessions from reducing worked time.
+ *
+ * Break intervals are merged before calculation so overlapping
+ * breaks cannot be deducted twice.
+ */
+const calculateBreakMillisecondsInsideWorkSessions = ({
+  workSessions = [],
+  breaks = [],
+}) => {
+  const sessionRanges = workSessions
+    .map((session) => {
+      const start = toDate(session?.checkInAt);
+      const end = toDate(session?.checkOutAt);
+
+      if (!start || !end || end <= start) {
+        return null;
+      }
+
+      return {
+        start: start.getTime(),
+        end: end.getTime(),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start);
+
+  const breakRanges = breaks
+    .map((breakItem) => {
+      const start = toDate(breakItem?.startedAt);
+      const end = toDate(breakItem?.endedAt);
+
+      if (!start || !end || end <= start) {
+        return null;
+      }
+
+      return {
+        start: start.getTime(),
+        end: end.getTime(),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start);
+
+  if (!sessionRanges.length || !breakRanges.length) {
+    return 0;
+  }
+
+  /**
+   * Merge overlapping/touching work sessions.
+   *
+   * Normally sessions must never overlap, but calculation
+   * utilities should remain defensive against malformed,
+   * imported, or manually corrected historical data.
+   */
+  const mergedSessions = [];
+
+  for (const range of sessionRanges) {
+    const last = mergedSessions[mergedSessions.length - 1];
+
+    if (!last || range.start > last.end) {
+      mergedSessions.push({ ...range });
+      continue;
+    }
+
+    last.end = Math.max(last.end, range.end);
+  }
+
+  /**
+   * Merge overlapping/touching breaks so the same period
+   * can never be deducted twice.
+   */
+  const mergedBreaks = [];
+
+  for (const range of breakRanges) {
+    const last = mergedBreaks[mergedBreaks.length - 1];
+
+    if (!last || range.start > last.end) {
+      mergedBreaks.push({ ...range });
+      continue;
+    }
+
+    last.end = Math.max(last.end, range.end);
+  }
+
+  let totalMilliseconds = 0;
+
+  for (const breakRange of mergedBreaks) {
+    for (const sessionRange of mergedSessions) {
+      const overlapStart = Math.max(breakRange.start, sessionRange.start);
+
+      const overlapEnd = Math.min(breakRange.end, sessionRange.end);
+
+      if (overlapEnd > overlapStart) {
+        totalMilliseconds += overlapEnd - overlapStart;
+      }
+    }
+  }
+
+  return totalMilliseconds;
+};
+
+export const calculateBreakMinutesInsideWorkSessions = ({
+  workSessions = [],
+  breaks = [],
+}) =>
+  millisecondsToMinutes(
+    calculateBreakMillisecondsInsideWorkSessions({
+      workSessions,
+      breaks,
+    }),
   );
 
 /**
@@ -506,11 +657,21 @@ export const calculateNetWorkedMinutes = ({
   workSessions = [],
   breaks = [],
 }) => {
-  const grossWorkedMinutes = calculateGrossWorkedMinutes(workSessions);
+  const grossWorkedMilliseconds =
+    calculateGrossWorkedMilliseconds(workSessions);
 
-  const totalBreakMinutes = calculateTotalBreakMinutes(breaks);
+  const deductibleBreakMilliseconds =
+    calculateBreakMillisecondsInsideWorkSessions({
+      workSessions,
+      breaks,
+    });
 
-  return Math.max(0, grossWorkedMinutes - totalBreakMinutes);
+  const netWorkedMilliseconds = Math.max(
+    0,
+    grossWorkedMilliseconds - deductibleBreakMilliseconds,
+  );
+
+  return millisecondsToMinutes(netWorkedMilliseconds);
 };
 
 /**
@@ -653,6 +814,7 @@ export const determineWorkedAttendanceStatus = ({
  * Only CLOSED work sessions participate because an open
  * session does not yet have a final duration.
  */
+
 export const calculateWorkedMinutesInsideWindow = ({
   workSessions = [],
   breaks = [],
@@ -667,62 +829,79 @@ export const calculateWorkedMinutesInsideWindow = ({
   }
 
   /**
-   * Calculate gross worked time overlapping the requested
-   * compensation window.
+   * Clip every valid work session to the requested window.
+   *
+   * Example:
+   *
+   * Window:  17:00 → 18:00
+   * Session: 16:30 → 17:30
+   *
+   * Effective session:
+   *          17:00 → 17:30
    */
-  const grossWorkedMinutes = workSessions.reduce((total, session) => {
-    const sessionStart = toDate(session.checkInAt);
-    const sessionEnd = toDate(session.checkOutAt);
+  const windowedWorkSessions = workSessions
+    .map((session) => {
+      const sessionStart = toDate(session?.checkInAt);
+      const sessionEnd = toDate(session?.checkOutAt);
 
-    if (!sessionStart || !sessionEnd) {
-      return total;
-    }
+      if (!sessionStart || !sessionEnd || sessionEnd <= sessionStart) {
+        return null;
+      }
 
-    const overlapStart = new Date(
-      Math.max(sessionStart.getTime(), startBoundary.getTime()),
-    );
+      const overlapStartMs = Math.max(
+        sessionStart.getTime(),
+        startBoundary.getTime(),
+      );
 
-    const overlapEnd = new Date(
-      Math.min(sessionEnd.getTime(), endBoundary.getTime()),
-    );
+      const overlapEndMs = Math.min(
+        sessionEnd.getTime(),
+        endBoundary.getTime(),
+      );
 
-    if (overlapEnd <= overlapStart) {
-      return total;
-    }
+      if (overlapEndMs <= overlapStartMs) {
+        return null;
+      }
 
-    return total + calculateMinutesBetween(overlapStart, overlapEnd);
-  }, 0);
+      return {
+        checkInAt: new Date(overlapStartMs),
+        checkOutAt: new Date(overlapEndMs),
+        status: "CLOSED",
+      };
+    })
+    .filter(Boolean);
+
+  if (!windowedWorkSessions.length) {
+    return 0;
+  }
 
   /**
-   * Calculate completed break time overlapping the same
-   * compensation window.
+   * Calculate gross work inside the requested window.
    */
-  const breakMinutes = breaks.reduce((total, breakItem) => {
-    const breakStart = toDate(breakItem.startedAt);
-    const breakEnd = toDate(breakItem.endedAt);
+  const grossWorkedMilliseconds =
+    calculateGrossWorkedMilliseconds(windowedWorkSessions);
 
-    if (!breakStart || !breakEnd) {
-      return total;
-    }
+  /**
+   * Deduct only break time that overlaps BOTH:
+   *
+   * 1. the requested window
+   * 2. an actual work session inside that window
+   *
+   * This protects compensation calculations from malformed
+   * break records outside real working time.
+   */
+  const deductibleBreakMilliseconds =
+    calculateBreakMillisecondsInsideWorkSessions({
+      workSessions: windowedWorkSessions,
+      breaks,
+    });
 
-    const overlapStart = new Date(
-      Math.max(breakStart.getTime(), startBoundary.getTime()),
-    );
+  const netWorkedMilliseconds = Math.max(
+    0,
+    grossWorkedMilliseconds - deductibleBreakMilliseconds,
+  );
 
-    const overlapEnd = new Date(
-      Math.min(breakEnd.getTime(), endBoundary.getTime()),
-    );
-
-    if (overlapEnd <= overlapStart) {
-      return total;
-    }
-
-    return total + calculateMinutesBetween(overlapStart, overlapEnd);
-  }, 0);
-
-  return Math.max(0, grossWorkedMinutes - breakMinutes);
+  return millisecondsToMinutes(netWorkedMilliseconds);
 };
-
 /**
  * Calculate schedule-deviation compensation.
  *
@@ -866,15 +1045,24 @@ export const calculateAttendanceTotals = ({
 
   const lastCheckOutAt = getLastCheckOutAt(workSessions);
 
-  const grossWorkedMinutes = calculateGrossWorkedMinutes(workSessions);
+  const grossWorkedMilliseconds =
+    calculateGrossWorkedMilliseconds(workSessions);
 
-  const totalBreakMinutes = calculateTotalBreakMinutes(breaks);
+  const totalBreakMilliseconds = calculateBreakMillisecondsInsideWorkSessions({
+    workSessions,
+    breaks,
+  });
 
-  const totalWorkedMinutes = Math.max(
+  const netWorkedMilliseconds = Math.max(
     0,
-    grossWorkedMinutes - totalBreakMinutes,
+    grossWorkedMilliseconds - totalBreakMilliseconds,
   );
 
+  const grossWorkedMinutes = millisecondsToMinutes(grossWorkedMilliseconds);
+
+  const totalBreakMinutes = millisecondsToMinutes(totalBreakMilliseconds);
+
+  const totalWorkedMinutes = millisecondsToMinutes(netWorkedMilliseconds);
   /**
    * Schedule adherence evidence.
    */

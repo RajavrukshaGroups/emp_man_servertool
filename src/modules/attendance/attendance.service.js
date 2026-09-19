@@ -2258,7 +2258,7 @@ export const startAttendanceBreak = async ({
       }
 
       attendance.breaks.push({
-        startedAt: new Date(),
+        startedAt: currentTime,
         endedAt: null,
 
         durationMinutes: 0,
