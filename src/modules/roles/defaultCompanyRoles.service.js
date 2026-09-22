@@ -72,6 +72,10 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.approve",
       "leave.reject",
       "leave.cancel",
+      "leave.type_read",
+      "leave.type_manage",
+      "leave.balance_read",
+      "leave.balance_manage",
 
       "attendance.check_in",
       "attendance.check_out",
@@ -148,6 +152,8 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.apply",
       "leave.read",
       "leave.recommend",
+      "leave.type_read",
+      "leave.balance_read",
 
       "attendance.check_in",
       "attendance.check_out",
@@ -201,6 +207,8 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.apply",
       "leave.read",
       "leave.cancel",
+      "leave.type_read",
+      "leave.balance_read",
 
       "attendance.check_in",
       "attendance.check_out",
