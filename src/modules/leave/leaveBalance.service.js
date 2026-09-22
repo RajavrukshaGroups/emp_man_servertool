@@ -197,177 +197,141 @@ export const createLeaveBalance = async ({
   leaveYearLabel,
   carriedForwardDays = 0,
   requesterContext,
-  session: externalSession = null,
+  session = null,
 }) => {
-  const ownSession = !externalSession;
-  const session = externalSession ?? (await mongoose.startSession());
-
-  let createdBalance = null;
-
-  const execute = async () => {
-    const [{ employee, companyAccess }, leaveType, leavePolicy] =
-      await Promise.all([
-        resolveEmployeeContext({
-          companyId,
-          employeeId,
-          session,
-        }),
-
-        findActiveLeaveType({
-          companyId,
-          leaveTypeId,
-          session,
-        }),
-
-        findActiveLeavePolicy({
-          companyId,
-          leavePolicyId,
-          session,
-        }),
-      ]);
-
-    if (leaveType.allocationMethod === "NO_BALANCE") {
-      throw new ApiError(
-        400,
-        "A leave balance must not be created for a no-balance leave type.",
-      );
-    }
-
-    const start = new Date(leaveYearStart);
-    const end = new Date(leaveYearEnd);
-
-    if (
-      new Date(leavePolicy.effectiveFrom) > start ||
-      (leavePolicy.effectiveTo && new Date(leavePolicy.effectiveTo) < start)
-    ) {
-      throw new ApiError(
-        400,
-        "The selected leave policy is not effective for this leave year.",
-      );
-    }
-
-    if (end < start) {
-      throw new ApiError(
-        400,
-        "Leave year end cannot be before leave year start.",
-      );
-    }
-
-    const existingBalance = await LeaveBalance.findOne({
-      companyId,
-      companyAccessId: companyAccess._id,
-      leaveTypeId,
-      leaveYearStart: start,
-      isDeleted: false,
-    })
-      .session(session)
-      .select("_id");
-
-    if (existingBalance) {
-      throw new ApiError(
-        409,
-        "A leave balance already exists for this employee, leave type and leave year.",
-      );
-    }
-
-    let allocatedDays = 0;
-
-    /**
-     * Annual-upfront allocation.
-     */
-    if (leaveType.allocationMethod === "ANNUAL_UPFRONT") {
-      allocatedDays = Number(leaveType.annualEntitlementDays || 0);
-
-      /**
-       * Proration for new joiners will be added here once
-       * we finalize leave-year/date calculation helpers.
-       *
-       * We deliberately do NOT guess the proration formula.
-       */
-    }
-
-    /**
-     * MONTHLY_ACCRUAL starts at zero.
-     *
-     * The monthly accrual operation credits the appropriate
-     * month separately.
-     */
-    if (leaveType.allocationMethod === "MONTHLY_ACCRUAL") {
-      allocatedDays = 0;
-    }
-
-    /**
-     * MANUAL also starts at zero.
-     *
-     * Admin allocation is performed through adjustments.
-     */
-    if (leaveType.allocationMethod === "MANUAL") {
-      allocatedDays = 0;
-    }
-
-    const [balance] = await LeaveBalance.create(
-      [
-        {
-          companyId,
-
-          employeeId: employee._id,
-          companyAccessId: companyAccess._id,
-
-          leaveTypeId: leaveType._id,
-          leavePolicyId,
-
-          leaveYearStart: start,
-          leaveYearEnd: end,
-          leaveYearLabel,
-
-          allocationMethod: leaveType.allocationMethod,
-
-          allocatedDays,
-
-          accruedDays: 0,
-
-          carriedForwardDays:
-            leaveType.carryForwardEnabled === true
-              ? Number(carriedForwardDays || 0)
-              : 0,
-
-          adjustedDays: 0,
-          pendingDays: 0,
-          usedDays: 0,
-          lapsedDays: 0,
-
-          monthlyBalances: [],
-          adjustmentHistory: [],
-
-          lastAccruedPeriodKey: null,
-
-          status: "ACTIVE",
-
-          createdBy: requesterContext.userId ?? null,
-          updatedBy: requesterContext.userId ?? null,
-        },
-      ],
-      {
+  const [{ employee, companyAccess }, leaveType, leavePolicy] =
+    await Promise.all([
+      resolveEmployeeContext({
+        companyId,
+        employeeId,
         session,
-      },
-    );
+      }),
 
-    createdBalance = balance;
+      findActiveLeaveType({
+        companyId,
+        leaveTypeId,
+        session,
+      }),
+
+      findActiveLeavePolicy({
+        companyId,
+        leavePolicyId,
+        session,
+      }),
+    ]);
+
+  if (leaveType.allocationMethod === "NO_BALANCE") {
+    throw new ApiError(
+      400,
+      "A leave balance must not be created for a no-balance leave type.",
+    );
+  }
+
+  const start = new Date(leaveYearStart);
+  const end = new Date(leaveYearEnd);
+
+  if (
+    new Date(leavePolicy.effectiveFrom) > start ||
+    (leavePolicy.effectiveTo && new Date(leavePolicy.effectiveTo) < start)
+  ) {
+    throw new ApiError(
+      400,
+      "The selected leave policy is not effective for this leave year.",
+    );
+  }
+
+  if (end < start) {
+    throw new ApiError(
+      400,
+      "Leave year end cannot be before leave year start.",
+    );
+  }
+
+  let existingBalanceQuery = LeaveBalance.findOne({
+    companyId,
+    companyAccessId: companyAccess._id,
+    leaveTypeId,
+    leaveYearStart: start,
+    isDeleted: false,
+  }).select("_id");
+
+  if (session) {
+    existingBalanceQuery = existingBalanceQuery.session(session);
+  }
+
+  const existingBalance = await existingBalanceQuery;
+
+  if (existingBalance) {
+    throw new ApiError(
+      409,
+      "A leave balance already exists for this employee, leave type and leave year.",
+    );
+  }
+
+  let allocatedDays = 0;
+
+  if (leaveType.allocationMethod === "ANNUAL_UPFRONT") {
+    allocatedDays = Number(leaveType.annualEntitlementDays || 0);
+  }
+
+  if (leaveType.allocationMethod === "MONTHLY_ACCRUAL") {
+    allocatedDays = 0;
+  }
+
+  if (leaveType.allocationMethod === "MANUAL") {
+    allocatedDays = 0;
+  }
+
+  const balanceData = {
+    companyId,
+
+    employeeId: employee._id,
+    companyAccessId: companyAccess._id,
+
+    leaveTypeId: leaveType._id,
+    leavePolicyId,
+
+    leaveYearStart: start,
+    leaveYearEnd: end,
+    leaveYearLabel,
+
+    allocationMethod: leaveType.allocationMethod,
+
+    allocatedDays,
+    accruedDays: 0,
+
+    carriedForwardDays:
+      leaveType.carryForwardEnabled === true
+        ? Number(carriedForwardDays || 0)
+        : 0,
+
+    adjustedDays: 0,
+    pendingDays: 0,
+    usedDays: 0,
+    lapsedDays: 0,
+
+    monthlyBalances: [],
+    adjustmentHistory: [],
+
+    lastAccruedPeriodKey: null,
+
+    status: "ACTIVE",
+
+    createdBy: requesterContext.userId ?? null,
+    updatedBy: requesterContext.userId ?? null,
   };
 
-  try {
-    if (ownSession) {
-      await session.withTransaction(execute);
-    } else {
-      await execute();
-    }
+  let balance;
 
-    return createdBalance;
-  } finally {
-    if (ownSession) {
-      await session.endSession();
-    }
+  if (session) {
+    [balance] = await LeaveBalance.create([balanceData], {
+      session,
+    });
+  } else {
+    balance = await LeaveBalance.create(balanceData);
   }
+
+  return balance;
 };
 
 /**

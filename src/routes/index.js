@@ -25,7 +25,10 @@ import companyAdministratorRoutes from "../modules/company-administrators/compan
 import clientRoutes from "../modules/clients/client.routes.js";
 import workCategoryRoutes from "../modules/work-categories/workCategory.routes.js";
 import attendanceRoutes from "../modules/attendance/attendance.routes.js";
-
+import leavePolicyRoutes from "../modules/leave/leavePolicy.routes.js";
+import leaveTypeRoutes from "../modules/leave/leaveType.routes.js";
+import leaveBalanceRoutes from "../modules/leave/leaveBalance.routes.js";
+import leaveRequestRoutes from "../modules/leave/leaveRequest.routes.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 
 const router = Router();
@@ -108,6 +111,14 @@ router.use("/companies/:companyId/employees", employeeRoutes);
 router.use("/companies/:companyId/tasks", taskRoutes);
 
 router.use("/companies/:companyId/attendance", attendanceRoutes);
+
+/**
+ * Leave Management
+ */
+router.use("/companies/:companyId/leave/policies", leavePolicyRoutes);
+router.use("/companies/:companyId/leave/types", leaveTypeRoutes);
+router.use("/companies/:companyId/leave/balances", leaveBalanceRoutes);
+router.use("/companies/:companyId/leave/requests", leaveRequestRoutes);
 
 router.use("/companies/:companyId/dashboard", dashboardRoutes);
 

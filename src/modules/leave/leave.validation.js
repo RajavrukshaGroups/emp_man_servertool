@@ -173,6 +173,38 @@ const leavePolicyFields = {
   status: statusSchema.default("ACTIVE"),
 };
 
+export const initializeLeaveBalanceSchema = z.object({
+  body: z
+    .object({
+      employeeId: objectIdSchema,
+      leaveTypeId: objectIdSchema,
+      leavePolicyId: objectIdSchema,
+
+      leaveYearStart: z.coerce.date(),
+      leaveYearEnd: z.coerce.date(),
+
+      leaveYearLabel: z
+        .string()
+        .trim()
+        .min(1, "Leave year label is required.")
+        .max(20, "Leave year label cannot exceed 20 characters."),
+
+      carriedForwardDays: halfDayNumberSchema.max(366).default(0),
+    })
+    .strict()
+    .refine(
+      (body) => body.leaveYearEnd.getTime() >= body.leaveYearStart.getTime(),
+      {
+        message: "Leave year end cannot be before leave year start.",
+        path: ["leaveYearEnd"],
+      },
+    ),
+
+  params: companyParamsSchema,
+
+  query: z.object({}).strict().optional(),
+});
+
 export const createLeavePolicySchema = z.object({
   body: z
     .object(leavePolicyFields)
@@ -678,6 +710,30 @@ export const adjustLeaveBalanceSchema = z.object({
         .trim()
         .min(3, "Adjustment reason must contain at least 3 characters.")
         .max(1000, "Adjustment reason cannot exceed 1000 characters."),
+    })
+    .strict(),
+
+  params: leaveBalanceParamsSchema,
+
+  query: z.object({}).strict().optional(),
+});
+
+/**
+ * Accrue monthly leave entitlement.
+ *
+ * periodDate determines which YYYY-MM monthly bucket
+ * should receive the configured monthly entitlement.
+ */
+/**
+ * Accrue monthly leave entitlement.
+ *
+ * periodDate determines which YYYY-MM monthly bucket
+ * receives the configured monthly entitlement.
+ */
+export const accrueMonthlyLeaveBalanceSchema = z.object({
+  body: z
+    .object({
+      periodDate: z.coerce.date(),
     })
     .strict(),
 

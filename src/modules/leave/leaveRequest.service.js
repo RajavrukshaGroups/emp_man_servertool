@@ -9,11 +9,18 @@ import Employee from "../employees/employee.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 
 import {
+  createLeaveBalance,
   reserveLeaveBalance,
   consumeReservedLeaveBalance,
   releaseReservedLeaveBalance,
   restoreConsumedLeaveBalance,
 } from "./leaveBalance.service.js";
+
+import {
+  buildLeaveRequestReadFilter,
+  canAccessLeaveCompanyAccess,
+  canManageLeaveCompanyAccess,
+} from "./leave.scope.js";
 
 import { ApiError } from "../../utils/ApiError.js";
 
@@ -506,19 +513,27 @@ const validateNoOverlappingLeave = async ({
  * ============================================================
  */
 
-const findApplicableLeaveBalance = async ({
+const findOrCreateApplicableLeaveBalance = async ({
   companyId,
+  employeeId,
   companyAccessId,
-  leaveTypeId,
+  leaveType,
+  leavePolicy,
   requestDate,
+  requesterContext,
   session,
 }) => {
   const date = normalizeDateOnly(requestDate);
 
-  const balance = await LeaveBalance.findOne({
+  const { leaveYearStart, leaveYearEnd, leaveYearLabel } = resolveLeaveYear({
+    requestDate: date,
+    leavePolicy,
+  });
+
+  let balance = await LeaveBalance.findOne({
     companyId,
     companyAccessId,
-    leaveTypeId,
+    leaveTypeId: leaveType._id,
 
     status: "ACTIVE",
     isDeleted: false,
@@ -532,14 +547,109 @@ const findApplicableLeaveBalance = async ({
     },
   }).session(session);
 
-  if (!balance) {
+  if (balance) {
+    return balance;
+  }
+
+  /**
+   * Company policy may require balances to be created
+   * beforehand by an administrator or initialization job.
+   */
+  if (leavePolicy.autoCreateLeaveBalances !== true) {
     throw new ApiError(
       409,
       "No active leave balance is available for this leave type and leave year.",
     );
   }
 
+  /**
+   * Automatically initialize the employee's balance using
+   * the existing balance-domain service.
+   */
+  balance = await createLeaveBalance({
+    companyId,
+
+    employeeId,
+
+    leaveTypeId: leaveType._id,
+
+    leavePolicyId: leavePolicy._id,
+
+    leaveYearStart,
+    leaveYearEnd,
+    leaveYearLabel,
+
+    carriedForwardDays: 0,
+
+    requesterContext,
+
+    session,
+  });
+
   return balance;
+};
+
+const resolveLeaveYear = ({ requestDate, leavePolicy }) => {
+  const date = normalizeDateOnly(requestDate);
+
+  const startMonth = Number(leavePolicy.leaveYearStartMonth) - 1;
+
+  const startDay = Number(leavePolicy.leaveYearStartDay);
+
+  let startYear = date.getUTCFullYear();
+
+  const candidateStart = new Date(Date.UTC(startYear, startMonth, startDay));
+
+  if (date < candidateStart) {
+    startYear -= 1;
+  }
+
+  const leaveYearStart = new Date(Date.UTC(startYear, startMonth, startDay));
+
+  const nextLeaveYearStart = new Date(
+    Date.UTC(startYear + 1, startMonth, startDay),
+  );
+
+  const leaveYearEnd = new Date(
+    nextLeaveYearStart.getTime() - 24 * 60 * 60 * 1000,
+  );
+
+  const leaveYearLabel =
+    leaveYearStart.getUTCFullYear() === leaveYearEnd.getUTCFullYear()
+      ? `${leaveYearStart.getUTCFullYear()}`
+      : `${leaveYearStart.getUTCFullYear()}-${leaveYearEnd.getUTCFullYear()}`;
+      
+  return {
+    leaveYearStart,
+    leaveYearEnd,
+    leaveYearLabel,
+  };
+};
+
+const validateRequestWithinSingleLeaveYear = ({
+  fromDate,
+  toDate,
+  leavePolicy,
+}) => {
+  const fromLeaveYear = resolveLeaveYear({
+    requestDate: fromDate,
+    leavePolicy,
+  });
+
+  const toLeaveYear = resolveLeaveYear({
+    requestDate: toDate,
+    leavePolicy,
+  });
+
+  if (
+    getDateKey(fromLeaveYear.leaveYearStart) !==
+    getDateKey(toLeaveYear.leaveYearStart)
+  ) {
+    throw new ApiError(
+      400,
+      "A leave request cannot span multiple leave years. Please submit separate leave requests for each leave year.",
+    );
+  }
 };
 
 /**
@@ -610,6 +720,15 @@ export const createLeaveRequest = async ({
         );
       }
 
+      /**
+       * A single leave request must belong to one leave year.
+       */
+      validateRequestWithinSingleLeaveYear({
+        fromDate,
+        toDate,
+        leavePolicy,
+      });
+
       const dateDetails = buildLeaveDateDetails({
         fromDate,
         toDate,
@@ -642,20 +761,23 @@ export const createLeaveRequest = async ({
         attachmentUrl: data.attachmentUrl,
       });
 
-      await validateNoOverlappingLeave({
-        companyId,
-        companyAccessId: companyAccess._id,
-        fromDate,
-        toDate,
-        session,
-      });
+      /**
+       * Prevent overlapping active leave requests only when
+       * enabled by the applicable company leave policy.
+       */
+      if (leavePolicy.preventOverlappingRequests === true) {
+        await validateNoOverlappingLeave({
+          companyId,
+          companyAccessId: companyAccess._id,
+          fromDate,
+          toDate,
+          session,
+        });
+      }
 
       let leaveBalance = null;
 
       let balanceStatus = "NOT_REQUIRED";
-
-      //   balanceStatus = "PENDING_RESERVATION";
-
       /**
        * Balance-backed leave.
        */
@@ -664,14 +786,20 @@ export const createLeaveRequest = async ({
         leaveType.allocationMethod !== "NO_BALANCE"
       ) {
         balanceStatus = "PENDING_RESERVATION";
-        leaveBalance = await findApplicableLeaveBalance({
+        leaveBalance = await findOrCreateApplicableLeaveBalance({
           companyId,
+
+          employeeId: employee._id,
 
           companyAccessId: companyAccess._id,
 
-          leaveTypeId: leaveType._id,
+          leaveType,
+
+          leavePolicy,
 
           requestDate: fromDate,
+
+          requesterContext,
 
           session,
         });
@@ -802,7 +930,7 @@ export const createLeaveRequest = async ({
 export const listLeaveRequests = async ({
   companyId,
   query,
-  scopeFilter = {},
+  requesterContext,
 }) => {
   const {
     page = 1,
@@ -825,43 +953,43 @@ export const listLeaveRequests = async ({
     sortOrder = "desc",
   } = query;
 
-  const filter = {
+  const scopeFilter = await buildLeaveRequestReadFilter({
+    requesterContext,
     companyId,
-    isDeleted: false,
+  });
 
-    ...scopeFilter,
-  };
+  const userFilter = {};
 
   if (employeeId) {
-    filter.employeeId = employeeId;
+    userFilter.employeeId = employeeId;
   }
 
   if (companyAccessId) {
-    filter.companyAccessId = companyAccessId;
+    userFilter.companyAccessId = companyAccessId;
   }
 
   if (departmentId) {
-    filter.departmentId = departmentId;
+    userFilter.departmentId = departmentId;
   }
 
   if (teamId) {
-    filter.teamId = teamId;
+    userFilter.teamId = teamId;
   }
 
   if (leaveTypeId) {
-    filter.leaveTypeId = leaveTypeId;
+    userFilter.leaveTypeId = leaveTypeId;
   }
 
   if (status) {
-    filter.status = status;
+    userFilter.status = status;
   }
 
   if (cancellationStatus) {
-    filter.cancellationStatus = cancellationStatus;
+    userFilter.cancellationStatus = cancellationStatus;
   }
 
   if (paymentType) {
-    filter.paymentType = paymentType;
+    userFilter.paymentType = paymentType;
   }
 
   /**
@@ -869,17 +997,24 @@ export const listLeaveRequests = async ({
    */
   if (fromDate || toDate) {
     if (toDate) {
-      filter.fromDate = {
+      userFilter.fromDate = {
         $lte: normalizeDateOnly(toDate),
       };
     }
 
     if (fromDate) {
-      filter.toDate = {
+      userFilter.toDate = {
         $gte: normalizeDateOnly(fromDate),
       };
     }
   }
+
+  const filter =
+    Object.keys(userFilter).length > 0
+      ? {
+          $and: [scopeFilter, userFilter],
+        }
+      : scopeFilter;
 
   const skip = (page - 1) * limit;
 
@@ -975,26 +1110,18 @@ export const listLeaveRequests = async ({
 export const getLeaveRequestById = async ({
   companyId,
   leaveRequestId,
-  scopeFilter = {},
+  requesterContext,
 }) => {
   const request = await LeaveRequest.findOne({
     _id: leaveRequestId,
-
     companyId,
-
     isDeleted: false,
-
-    ...scopeFilter,
   })
-
     .populate({
       path: "employeeId",
-
       select: "userId companyAccessId status",
-
       populate: {
         path: "userId",
-
         select:
           "firstName middleName lastName displayName email profilePhoto status",
       },
@@ -1002,21 +1129,17 @@ export const getLeaveRequestById = async ({
 
     .populate({
       path: "companyAccessId",
-
       select:
         "employeeCode designation departmentId teamId roleId reportingManagerId status",
-
       populate: [
         {
           path: "departmentId",
           select: "name code status",
         },
-
         {
           path: "teamId",
           select: "name code status",
         },
-
         {
           path: "roleId",
           select: "name code scopeType status",
@@ -1026,19 +1149,16 @@ export const getLeaveRequestById = async ({
 
     .populate({
       path: "leaveTypeId",
-
       select: "name code paymentType allocationMethod status",
     })
 
     .populate({
       path: "leavePolicyId",
-
       select: "name code status",
     })
 
     .populate({
       path: "leaveBalanceId",
-
       select:
         "leaveYearLabel allocationMethod allocatedDays accruedDays carriedForwardDays adjustedDays pendingDays usedDays lapsedDays status",
     })
@@ -1049,9 +1169,27 @@ export const getLeaveRequestById = async ({
     throw new ApiError(404, "Leave request not found.");
   }
 
+  /**
+   * SECURITY:
+   * Verify that the authenticated requester may access
+   * the employee who owns this leave request.
+   */
+  const allowed = await canAccessLeaveCompanyAccess({
+    requesterContext,
+    companyId,
+    targetCompanyAccessId:
+      request.companyAccessId?._id || request.companyAccessId,
+  });
+
+  if (!allowed) {
+    throw new ApiError(
+      403,
+      "You are not allowed to access this leave request.",
+    );
+  }
+
   return request;
 };
-
 /**
  * ============================================================
  * WORKFLOW HELPERS
@@ -1119,6 +1257,59 @@ const releaseRequestBalanceIfRequired = async ({
   request.balanceError = "";
 };
 
+const finalizeApprovedLeaveCancellation = async ({
+  companyId,
+  request,
+  requesterContext,
+  session,
+  reviewNote = "",
+}) => {
+  /**
+   * Restore consumed leave balance when applicable.
+   */
+  if (request.balanceStatus === "CONSUMED" && request.leaveBalanceId) {
+    await restoreConsumedLeaveBalance({
+      companyId,
+      balanceId: request.leaveBalanceId,
+      days: request.requestedDays,
+      allocations: request.balanceAllocations ?? [],
+      requesterContext,
+      session,
+    });
+
+    request.balanceStatus = "RELEASED";
+    request.balanceError = "";
+  }
+
+  const previousStatus = request.status;
+  const now = new Date();
+
+  request.cancellationStatus = "APPROVED";
+
+  request.cancellationReviewedBy = requesterContext.userId;
+  request.cancellationReviewedAt = now;
+  request.cancellationReviewNote = reviewNote ?? "";
+
+  request.status = "CANCELLED";
+
+  request.cancelledBy = requesterContext.userId;
+  request.cancelledAt = now;
+  request.cancellationReason = request.cancellationRequestReason;
+
+  request.updatedBy = requesterContext.userId;
+
+  addStatusHistory({
+    request,
+    fromStatus: previousStatus,
+    toStatus: "CANCELLED",
+    userId: requesterContext.userId,
+    note:
+      reviewNote ||
+      request.cancellationRequestReason ||
+      "Approved leave cancelled.",
+  });
+};
+
 /**
  * ============================================================
  * RECOMMEND LEAVE REQUEST
@@ -1142,6 +1333,38 @@ export const recommendLeaveRequest = async ({
         leaveRequestId,
         session,
       });
+
+      /**
+       * SECURITY:
+       *
+       * Recommendation is a managerial action.
+       *
+       * COMPANY scope:
+       *   Can manage employees in the company.
+       *
+       * TEAM scope:
+       *   Can manage employees belonging to teams actually managed
+       *   by the requester.
+       *
+       * SELF:
+       *   Not allowed. A Team Lead must not recommend their own leave.
+       *
+       * Route-level permission checks remain separate.
+       */
+      const canManage = await canManageLeaveCompanyAccess({
+        requesterContext,
+        companyId,
+        targetCompanyAccessId: request.companyAccessId,
+        allowSelf: false,
+        session,
+      });
+
+      if (!canManage) {
+        throw new ApiError(
+          403,
+          "You are not allowed to recommend this leave request.",
+        );
+      }
 
       if (request.status !== "PENDING") {
         throw new ApiError(
@@ -1207,6 +1430,29 @@ export const approveLeaveRequest = async ({
         leaveRequestId,
         session,
       });
+
+      /**
+       * SECURITY:
+       * Approval is a managerial action.
+       * The requester must be allowed to manage the employee
+       * who owns this leave request.
+       *
+       * Self-approval is intentionally blocked.
+       */
+      const canManage = await canManageLeaveCompanyAccess({
+        requesterContext,
+        companyId,
+        targetCompanyAccessId: request.companyAccessId,
+        allowSelf: false,
+        session,
+      });
+
+      if (!canManage) {
+        throw new ApiError(
+          403,
+          "You are not allowed to approve this leave request.",
+        );
+      }
 
       const policy = await LeavePolicy.findOne({
         _id: request.leavePolicyId,
@@ -1380,6 +1626,27 @@ export const rejectLeaveRequest = async ({
         session,
       });
 
+      /**
+       * SECURITY:
+       * Rejection is a managerial action.
+       *
+       * Self-rejection is intentionally blocked.
+       */
+      const canManage = await canManageLeaveCompanyAccess({
+        requesterContext,
+        companyId,
+        targetCompanyAccessId: request.companyAccessId,
+        allowSelf: false,
+        session,
+      });
+
+      if (!canManage) {
+        throw new ApiError(
+          403,
+          "You are not allowed to reject this leave request.",
+        );
+      }
+
       if (request.status !== "PENDING" && request.status !== "RECOMMENDED") {
         throw new ApiError(
           409,
@@ -1460,6 +1727,55 @@ export const cancelLeaveRequest = async ({
         );
       }
 
+      /**
+       * SECURITY:
+       * Direct cancellation is a self-service employee action.
+       * An employee may cancel only their own leave request.
+       */
+      const isOwnRequest =
+        String(request.companyAccessId) ===
+        String(requesterContext.companyAccessId);
+
+      if (!isOwnRequest) {
+        throw new ApiError(
+          403,
+          "You are not allowed to cancel this leave request.",
+        );
+      }
+
+      const policy = await LeavePolicy.findOne({
+        _id: request.leavePolicyId,
+        companyId,
+        isDeleted: false,
+      }).session(session);
+
+      if (!policy) {
+        throw new ApiError(
+          404,
+          "Leave policy associated with this request was not found.",
+        );
+      }
+
+      if (
+        request.status === "PENDING" &&
+        policy.allowEmployeeCancelPending !== true
+      ) {
+        throw new ApiError(
+          409,
+          "Cancellation of pending leave requests is not allowed by the applicable leave policy.",
+        );
+      }
+
+      if (
+        request.status === "RECOMMENDED" &&
+        policy.allowEmployeeCancelRecommended !== true
+      ) {
+        throw new ApiError(
+          409,
+          "Cancellation of recommended leave requests is not allowed by the applicable leave policy.",
+        );
+      }
+
       await releaseRequestBalanceIfRequired({
         companyId,
         request,
@@ -1526,6 +1842,25 @@ export const requestApprovedLeaveCancellation = async ({
         session,
       });
 
+      /**
+       * SECURITY:
+       * Requesting cancellation of approved leave is a
+       * self-service employee action.
+       *
+       * Employees may request cancellation only for
+       * their own approved leave.
+       */
+      const isOwnRequest =
+        String(request.companyAccessId) ===
+        String(requesterContext.companyAccessId);
+
+      if (!isOwnRequest) {
+        throw new ApiError(
+          403,
+          "You are not allowed to request cancellation of this leave.",
+        );
+      }
+
       if (request.status !== "APPROVED") {
         throw new ApiError(
           409,
@@ -1567,26 +1902,43 @@ export const requestApprovedLeaveCancellation = async ({
         );
       }
 
-      request.cancellationStatus = "PENDING";
+      const now = new Date();
 
       request.cancellationRequestedBy = requesterContext.userId;
-
-      request.cancellationRequestedAt = new Date();
-
+      request.cancellationRequestedAt = now;
       request.cancellationRequestReason = data.reason;
 
       request.cancellationReviewedBy = null;
-
       request.cancellationReviewedAt = null;
-
       request.cancellationReviewNote = "";
 
       request.updatedBy = requesterContext.userId;
 
       /**
-       * Main status remains APPROVED until the
-       * cancellation itself is approved.
+       * If company policy requires managerial approval,
+       * keep the leave APPROVED and create a pending
+       * cancellation request.
        */
+      if (policy.approvedCancellationRequiresApproval === true) {
+        request.cancellationStatus = "PENDING";
+      } else {
+        /**
+         * No cancellation approval is required.
+         *
+         * Finalize the cancellation immediately.
+         * The helper restores consumed leave balance
+         * and changes the leave itself to CANCELLED.
+         */
+        await finalizeApprovedLeaveCancellation({
+          companyId,
+          request,
+          requesterContext,
+          session,
+          reviewNote:
+            "Approved leave cancelled automatically as per leave policy.",
+        });
+      }
+
       await request.save({
         session,
       });
@@ -1624,6 +1976,29 @@ export const approveLeaveCancellation = async ({
         session,
       });
 
+      /**
+       * SECURITY:
+       * Reviewing an approved-leave cancellation is a managerial action.
+       * Self-review is intentionally blocked.
+       */
+      const canManage = await canManageLeaveCompanyAccess({
+        requesterContext,
+        companyId,
+        targetCompanyAccessId: request.companyAccessId,
+        allowSelf: false,
+        session,
+      });
+
+      if (!canManage) {
+        throw new ApiError(
+          403,
+          "You are not allowed to approve cancellation of this leave request.",
+        );
+      }
+
+      /**
+       * The original leave itself must still be APPROVED.
+       */
       if (request.status !== "APPROVED") {
         throw new ApiError(
           409,
@@ -1631,6 +2006,10 @@ export const approveLeaveCancellation = async ({
         );
       }
 
+      /**
+       * There must be an active cancellation request waiting
+       * for managerial approval.
+       */
       if (request.cancellationStatus !== "PENDING") {
         throw new ApiError(
           409,
@@ -1639,68 +2018,24 @@ export const approveLeaveCancellation = async ({
       }
 
       /**
-       * Restore consumed balance.
-       */
-      if (request.balanceStatus === "CONSUMED" && request.leaveBalanceId) {
-        await restoreConsumedLeaveBalance({
-          companyId,
-          balanceId: request.leaveBalanceId,
-          days: request.requestedDays,
-          allocations: request.balanceAllocations ?? [],
-          requesterContext,
-          session,
-        });
-
-        request.balanceStatus = "RELEASED";
-
-        request.balanceError = "";
-      }
-
-      const previousStatus = request.status;
-
-      const now = new Date();
-
-      request.cancellationStatus = "APPROVED";
-
-      request.cancellationReviewedBy = requesterContext.userId;
-
-      request.cancellationReviewedAt = now;
-
-      request.cancellationReviewNote = data.note ?? "";
-
-      /**
-       * Approved cancellation makes the leave itself
-       * CANCELLED.
-       */
-      request.status = "CANCELLED";
-
-      request.cancelledBy = requesterContext.userId;
-
-      request.cancelledAt = now;
-
-      request.cancellationReason = request.cancellationRequestReason;
-
-      request.updatedBy = requesterContext.userId;
-
-      /**
-       * If attendance was previously applied, we do not
-       * silently modify it here.
+       * Finalize the approved cancellation.
        *
-       * Attendance reversal integration will handle it.
+       * This helper:
+       * - restores consumed leave balance when required
+       * - marks cancellation as APPROVED
+       * - changes the leave status to CANCELLED
+       * - stores cancellation review information
+       * - writes status history
+       *
+       * Attendance is deliberately NOT changed here.
+       * Actual attendance reversal will be integrated separately.
        */
-      if (request.attendanceApplicationStatus === "APPLIED") {
-        request.attendanceApplicationStatus = "NOT_APPLIED";
-      }
-
-      addStatusHistory({
+      await finalizeApprovedLeaveCancellation({
+        companyId,
         request,
-        fromStatus: previousStatus,
-        toStatus: "CANCELLED",
-        userId: requesterContext.userId,
-        note:
-          data.note ||
-          request.cancellationRequestReason ||
-          "Approved leave cancellation approved.",
+        requesterContext,
+        session,
+        reviewNote: data.note ?? "",
       });
 
       await request.save({
@@ -1739,6 +2074,26 @@ export const rejectLeaveCancellation = async ({
         leaveRequestId,
         session,
       });
+
+      /**
+       * SECURITY:
+       * Rejecting an approved-leave cancellation is a managerial action.
+       * Self-review is intentionally blocked.
+       */
+      const canManage = await canManageLeaveCompanyAccess({
+        requesterContext,
+        companyId,
+        targetCompanyAccessId: request.companyAccessId,
+        allowSelf: false,
+        session,
+      });
+
+      if (!canManage) {
+        throw new ApiError(
+          403,
+          "You are not allowed to reject cancellation of this leave request.",
+        );
+      }
 
       if (request.status !== "APPROVED") {
         throw new ApiError(

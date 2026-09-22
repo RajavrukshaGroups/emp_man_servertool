@@ -152,6 +152,7 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.apply",
       "leave.read",
       "leave.recommend",
+      "leave.cancel",
       "leave.type_read",
       "leave.balance_read",
 
