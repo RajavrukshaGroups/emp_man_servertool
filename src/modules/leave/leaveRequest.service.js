@@ -618,7 +618,7 @@ const resolveLeaveYear = ({ requestDate, leavePolicy }) => {
     leaveYearStart.getUTCFullYear() === leaveYearEnd.getUTCFullYear()
       ? `${leaveYearStart.getUTCFullYear()}`
       : `${leaveYearStart.getUTCFullYear()}-${leaveYearEnd.getUTCFullYear()}`;
-      
+
   return {
     leaveYearStart,
     leaveYearEnd,
@@ -1072,7 +1072,8 @@ export const listLeaveRequests = async ({
       .populate({
         path: "leavePolicyId",
 
-        select: "name code status",
+        select:
+          "name code status approvalWorkflow allowApprovalWithoutRecommendation",
       })
 
       .sort(sort)
@@ -1154,7 +1155,8 @@ export const getLeaveRequestById = async ({
 
     .populate({
       path: "leavePolicyId",
-      select: "name code status",
+      select:
+        "name code status approvalWorkflow allowApprovalWithoutRecommendation",
     })
 
     .populate({

@@ -10,7 +10,7 @@ import {
 
 import {
   getLeaveRequesterContext,
-  buildReadableLeaveCompanyAccessFilter,
+  getReadableLeaveCompanyAccessIds,
   canAccessLeaveCompanyAccess,
 } from "./leave.scope.js";
 
@@ -54,10 +54,31 @@ export const listBalances = async (req, res, next) => {
 
     const requesterContext = getLeaveRequesterContext(req);
 
-    const scopeFilter = await buildReadableLeaveCompanyAccessFilter({
-      companyId,
-      requesterContext,
-    });
+    let scopeFilter = {};
+
+    /**
+     * GLOBAL / COMPANY scope can read all balances
+     * inside the selected company.
+     *
+     * Other scopes must first resolve the CompanyAccess
+     * records they are allowed to read.
+     */
+    if (
+      requesterContext.accessType !== "GLOBAL" &&
+      requesterContext.roleScopeType !== "GLOBAL" &&
+      requesterContext.roleScopeType !== "COMPANY"
+    ) {
+      const readableCompanyAccessIds = await getReadableLeaveCompanyAccessIds({
+        companyId,
+        requesterContext,
+      });
+
+      scopeFilter = {
+        companyAccessId: {
+          $in: readableCompanyAccessIds,
+        },
+      };
+    }
 
     const data = await listLeaveBalances({
       companyId,
@@ -179,6 +200,7 @@ export const adjustBalance = async (req, res, next) => {
       companyId,
       balanceId,
       adjustmentDays: req.validated.body.adjustmentDays,
+      periodKey: req.validated.body.periodKey,
       reason: req.validated.body.reason,
       requesterContext,
     });

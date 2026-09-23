@@ -611,6 +611,7 @@ export const adjustLeaveBalance = async ({
   companyId,
   balanceId,
   adjustmentDays,
+  periodKey = null,
   reason,
   requesterContext,
 }) => {
@@ -641,24 +642,87 @@ export const adjustLeaveBalance = async ({
         );
       }
 
-      const currentAvailable = calculateAvailableDays(balance);
-
-      const resultingAvailable = roundToHalfDay(currentAvailable + adjustment);
-
       /**
-       * Administrative adjustment must not create an
-       * impossible negative balance.
+       * ============================================================
+       * MONTHLY ACCRUAL ADJUSTMENT
+       * ============================================================
        *
-       * Negative-balance leave behavior belongs to leave
-       * request rules, not arbitrary admin corrections.
+       * Monthly-accrual leave is controlled by individual YYYY-MM
+       * buckets. Therefore an administrative adjustment must also
+       * belong to a specific monthly bucket.
        */
-      if (resultingAvailable < 0) {
-        throw new ApiError(
-          409,
-          "This adjustment would make the available leave balance negative.",
+      if (balance.allocationMethod === "MONTHLY_ACCRUAL") {
+        if (!periodKey) {
+          throw new ApiError(
+            400,
+            "Adjustment period is required for a monthly-accrual leave balance.",
+          );
+        }
+
+        const bucket = balance.monthlyBalances.find(
+          (item) => item.periodKey === periodKey,
         );
+
+        if (!bucket) {
+          throw new ApiError(
+            409,
+            `No monthly leave entitlement is available for ${periodKey}.`,
+          );
+        }
+
+        const currentBucketAvailable = roundToHalfDay(
+          Number(bucket.creditedDays || 0) +
+            Number(bucket.adjustedDays || 0) -
+            Number(bucket.pendingDays || 0) -
+            Number(bucket.usedDays || 0) -
+            Number(bucket.lapsedDays || 0),
+        );
+
+        const resultingBucketAvailable = roundToHalfDay(
+          currentBucketAvailable + adjustment,
+        );
+
+        if (resultingBucketAvailable < 0) {
+          throw new ApiError(
+            409,
+            `This adjustment would make the available leave balance for ${periodKey} negative.`,
+          );
+        }
+
+        bucket.adjustedDays = roundToHalfDay(
+          Number(bucket.adjustedDays || 0) + adjustment,
+        );
+      } else {
+        /**
+         * periodKey has no meaning for annual/manual balances.
+         *
+         * Reject it instead of silently ignoring incorrect input.
+         */
+        if (periodKey) {
+          throw new ApiError(
+            400,
+            "Adjustment period is allowed only for monthly-accrual leave balances.",
+          );
+        }
+
+        const currentAvailable = calculateAvailableDays(balance);
+
+        const resultingAvailable = roundToHalfDay(
+          currentAvailable + adjustment,
+        );
+
+        if (resultingAvailable < 0) {
+          throw new ApiError(
+            409,
+            "This adjustment would make the available leave balance negative.",
+          );
+        }
       }
 
+      /**
+       * Keep the aggregate balance synchronized with the
+       * monthly bucket adjustment.
+       */
       balance.adjustedDays = roundToHalfDay(
         Number(balance.adjustedDays || 0) + adjustment,
       );

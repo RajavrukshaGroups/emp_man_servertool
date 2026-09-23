@@ -705,6 +705,15 @@ export const adjustLeaveBalanceSchema = z.object({
           "Leave adjustment must use whole-day or half-day increments.",
         ),
 
+      periodKey: z
+        .string()
+        .trim()
+        .regex(
+          /^\d{4}-(0[1-9]|1[0-2])$/,
+          "Adjustment period must use YYYY-MM format.",
+        )
+        .optional(),
+
       reason: z
         .string()
         .trim()
