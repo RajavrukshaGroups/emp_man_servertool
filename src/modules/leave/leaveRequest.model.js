@@ -59,58 +59,109 @@ const leaveDateDetailSchema = new mongoose.Schema(
     },
 
     /**
-     * How this specific leave date is financially allocated.
+     * Financial allocation for this specific leave date.
+     *
+     * A date may be:
      *
      * PAID:
-     *   Covered by the employee's selected paid leave entitlement.
+     *   Fully covered by the selected paid leave type.
      *
      * UNPAID:
-     *   Not covered by the selected paid entitlement and therefore
-     *   treated as Loss of Pay.
+     *   Fully treated as unpaid / Loss of Pay.
+     *
+     * MIXED:
+     *   Partially paid and partially unpaid.
+     *   Example: 0.5 CL + 0.5 LOP on a full working day.
      *
      * NOT_APPLICABLE:
-     *   Date is not counted as leave, for example an excluded
-     *   weekly off or public holiday.
+     *   Date is not counted as leave.
      */
     allocationType: {
       type: String,
-      enum: ["PAID", "UNPAID", "NOT_APPLICABLE"],
+      enum: ["PAID", "UNPAID", "MIXED", "NOT_APPLICABLE"],
       default: "PAID",
     },
 
     /**
-     * Snapshot/reference of the actual leave type applied to this date.
+     * Exact paid portion of this date.
      *
-     * For paid dates this will normally be the leave type selected
-     * by the employee.
-     *
-     * For unpaid overflow dates this will reference the configured
-     * Loss of Pay / unpaid leave type.
+     * Examples:
+     * 1   = full paid day
+     * 0.5 = half paid day
+     * 0   = no paid leave
      */
-    allocatedLeaveTypeId: {
+    paidDays: {
+      type: Number,
+      default: 0,
+      min: [0, "Paid days for a leave date cannot be negative."],
+      max: [1, "Paid days for a leave date cannot exceed 1."],
+      validate: halfDayIncrementValidator,
+    },
+
+    /**
+     * Exact unpaid / LOP portion of this date.
+     */
+    unpaidDays: {
+      type: Number,
+      default: 0,
+      min: [0, "Unpaid days for a leave date cannot be negative."],
+      max: [1, "Unpaid days for a leave date cannot exceed 1."],
+      validate: halfDayIncrementValidator,
+    },
+
+    /**
+     * Paid leave type snapshot.
+     *
+     * Normally this is the leave type selected by the employee,
+     * for example Casual Leave or Sick Leave.
+     */
+    paidLeaveTypeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeaveType",
       default: null,
     },
 
-    allocatedLeaveTypeName: {
+    paidLeaveTypeName: {
       type: String,
       trim: true,
       default: "",
-      maxlength: [
-        100,
-        "Allocated leave type name cannot exceed 100 characters.",
-      ],
+      maxlength: [100, "Paid leave type name cannot exceed 100 characters."],
     },
 
-    allocatedLeaveTypeCode: {
+    paidLeaveTypeCode: {
       type: String,
       trim: true,
       uppercase: true,
       default: "",
-      maxlength: [30, "Allocated leave type code cannot exceed 30 characters."],
+      maxlength: [30, "Paid leave type code cannot exceed 30 characters."],
     },
 
+    /**
+     * Unpaid leave type snapshot.
+     *
+     * This identifies the configured LOP / unpaid leave type
+     * when some or all of this date is unpaid.
+     */
+    unpaidLeaveTypeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "LeaveType",
+      default: null,
+    },
+
+    unpaidLeaveTypeName: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: [100, "Unpaid leave type name cannot exceed 100 characters."],
+    },
+
+    unpaidLeaveTypeCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+      maxlength: [30, "Unpaid leave type code cannot exceed 30 characters."],
+    },
     attendanceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Attendance",

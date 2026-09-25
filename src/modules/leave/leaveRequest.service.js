@@ -189,11 +189,14 @@ const findApplicableUnpaidLeaveType = async ({
   const start = normalizeDateOnly(fromDate);
   const end = normalizeDateOnly(toDate);
 
-  const unpaidLeaveType = await LeaveType.findOne({
+  const unpaidLeaveTypes = await LeaveType.find({
     companyId,
     isDeleted: false,
     status: "ACTIVE",
+
     paymentType: "UNPAID",
+    requiresBalance: false,
+    allocationMethod: "NO_BALANCE",
 
     effectiveFrom: {
       $lte: start,
@@ -216,7 +219,18 @@ const findApplicableUnpaidLeaveType = async ({
     })
     .session(session);
 
-  return unpaidLeaveType;
+  if (unpaidLeaveTypes.length === 0) {
+    return null;
+  }
+
+  if (unpaidLeaveTypes.length > 1) {
+    throw new ApiError(
+      409,
+      "Multiple active unpaid leave types are configured for automatic unpaid overflow. Please keep only one applicable unpaid no-balance leave type active.",
+    );
+  }
+
+  return unpaidLeaveTypes[0];
 };
 
 /**
@@ -465,6 +479,20 @@ const calculateUsablePaidAllocations = ({
     calculateAvailableDays(leaveBalance),
   );
 
+  /**
+   * maximumConsecutiveDays limits how much of this request
+   * may be covered by the selected paid leave type.
+   *
+   * The remaining requested days are allowed to continue
+   * as unpaid leave (LOP) instead of rejecting the request.
+   */
+  if (Number(leaveType.maximumConsecutiveDays || 0) > 0) {
+    remainingAggregateAvailable = Math.min(
+      remainingAggregateAvailable,
+      Number(leaveType.maximumConsecutiveDays),
+    );
+  }
+
   const allocations = [];
 
   for (const [periodKey, requestedDays] of requestedByPeriod.entries()) {
@@ -548,60 +576,182 @@ const calculateUsablePaidAllocations = ({
 };
 
 /**
- * Apply the calculated paid entitlement to individual dates.
+ * Apply paid/unpaid allocation to each individual leave date.
  *
- * Allocation is deterministic:
- * earliest counted leave dates consume the selected paid
- * entitlement first; remaining counted leave becomes LOP.
+ * MONTHLY_ACCRUAL:
+ * - A month's paid entitlement may only cover dates in that same month.
+ *
+ * ANNUAL_UPFRONT / MANUAL:
+ * - Paid entitlement is applied chronologically across the request.
+ *
+ * A single full date may be split, for example:
+ * 0.5 paid + 0.5 unpaid.
  */
 const applyPaidUnpaidAllocationToDates = ({
   dateDetails,
-  paidDays,
+  balanceAllocations,
   selectedLeaveType,
   unpaidLeaveType,
 }) => {
-  let remainingPaidDays = Number(paidDays || 0);
+  const isMonthlyAllocation =
+    selectedLeaveType.paymentType === "PAID" &&
+    selectedLeaveType.requiresBalance === true &&
+    selectedLeaveType.allocationMethod === "MONTHLY_ACCRUAL";
+
+  /**
+   * Remaining paid entitlement keyed by period.
+   *
+   * MONTHLY_ACCRUAL:
+   *   "2026-09" => 1
+   *   "2026-10" => 0.5
+   *
+   * Annual/manual:
+   *   null => total usable paid entitlement
+   */
+  const remainingPaidByPeriod = new Map();
+
+  for (const allocation of balanceAllocations ?? []) {
+    const key = isMonthlyAllocation ? allocation.periodKey : null;
+
+    const current = remainingPaidByPeriod.get(key) ?? 0;
+
+    remainingPaidByPeriod.set(
+      key,
+      Number((current + Number(allocation.days || 0)).toFixed(2)),
+    );
+  }
 
   return dateDetails.map((detail) => {
+    const leaveDays = Number(detail.leaveDays || 0);
+
     /**
-     * Excluded/non-counted dates have no financial leave allocation.
+     * Weekly offs / holidays that are not counted as leave
+     * receive no financial allocation.
      */
-    if (detail.countedAsLeave !== true || Number(detail.leaveDays || 0) <= 0) {
+    if (detail.countedAsLeave !== true || leaveDays <= 0) {
       return {
         ...detail,
+
         allocationType: "NOT_APPLICABLE",
-        allocatedLeaveTypeId: null,
-        allocatedLeaveTypeName: "",
-        allocatedLeaveTypeCode: "",
+
+        paidDays: 0,
+        unpaidDays: 0,
+
+        paidLeaveTypeId: null,
+        paidLeaveTypeName: "",
+        paidLeaveTypeCode: "",
+
+        unpaidLeaveTypeId: null,
+        unpaidLeaveTypeName: "",
+        unpaidLeaveTypeCode: "",
       };
     }
 
-    const leaveDays = Number(detail.leaveDays);
-
     /**
-     * Current V1 date portions are 1 or 0.5 day.
-     *
-     * Because paid entitlement also moves in 0.5-day increments,
-     * a date can be assigned completely to PAID or UNPAID.
+     * Directly selected unpaid leave.
      */
-    if (remainingPaidDays >= leaveDays) {
-      remainingPaidDays = Number((remainingPaidDays - leaveDays).toFixed(2));
-
+    if (selectedLeaveType.paymentType === "UNPAID") {
       return {
         ...detail,
-        allocationType: "PAID",
-        allocatedLeaveTypeId: selectedLeaveType._id,
-        allocatedLeaveTypeName: selectedLeaveType.name,
-        allocatedLeaveTypeCode: selectedLeaveType.code,
+
+        allocationType: "UNPAID",
+
+        paidDays: 0,
+        unpaidDays: leaveDays,
+
+        paidLeaveTypeId: null,
+        paidLeaveTypeName: "",
+        paidLeaveTypeCode: "",
+
+        unpaidLeaveTypeId: selectedLeaveType._id,
+        unpaidLeaveTypeName: selectedLeaveType.name,
+        unpaidLeaveTypeCode: selectedLeaveType.code,
       };
+    }
+
+    /**
+     * Paid leave type that does not require a balance.
+     *
+     * The entire date is paid.
+     */
+    if (
+      selectedLeaveType.paymentType === "PAID" &&
+      (selectedLeaveType.requiresBalance !== true ||
+        selectedLeaveType.allocationMethod === "NO_BALANCE")
+    ) {
+      return {
+        ...detail,
+
+        allocationType: "PAID",
+
+        paidDays: leaveDays,
+        unpaidDays: 0,
+
+        paidLeaveTypeId: selectedLeaveType._id,
+        paidLeaveTypeName: selectedLeaveType.name,
+        paidLeaveTypeCode: selectedLeaveType.code,
+
+        unpaidLeaveTypeId: null,
+        unpaidLeaveTypeName: "",
+        unpaidLeaveTypeCode: "",
+      };
+    }
+
+    /**
+     * Balance-backed paid leave.
+     *
+     * Monthly accrual must use only the entitlement belonging
+     * to this date's own month.
+     *
+     * Annual/manual allocation uses the shared null bucket.
+     */
+    const allocationKey = isMonthlyAllocation
+      ? getPeriodKey(detail.date)
+      : null;
+
+    const remainingPaid = Number(remainingPaidByPeriod.get(allocationKey) ?? 0);
+
+    const paidForDate = Number(Math.min(leaveDays, remainingPaid).toFixed(2));
+
+    const unpaidForDate = Number(
+      Math.max(0, leaveDays - paidForDate).toFixed(2),
+    );
+
+    remainingPaidByPeriod.set(
+      allocationKey,
+      Number(Math.max(0, remainingPaid - paidForDate).toFixed(2)),
+    );
+
+    let allocationType = "UNPAID";
+
+    if (paidForDate > 0 && unpaidForDate > 0) {
+      allocationType = "MIXED";
+    } else if (paidForDate > 0) {
+      allocationType = "PAID";
     }
 
     return {
       ...detail,
-      allocationType: "UNPAID",
-      allocatedLeaveTypeId: unpaidLeaveType?._id ?? null,
-      allocatedLeaveTypeName: unpaidLeaveType?.name ?? "Loss of Pay",
-      allocatedLeaveTypeCode: unpaidLeaveType?.code ?? "LOP",
+
+      allocationType,
+
+      paidDays: paidForDate,
+      unpaidDays: unpaidForDate,
+
+      paidLeaveTypeId: paidForDate > 0 ? selectedLeaveType._id : null,
+
+      paidLeaveTypeName: paidForDate > 0 ? selectedLeaveType.name : "",
+
+      paidLeaveTypeCode: paidForDate > 0 ? selectedLeaveType.code : "",
+
+      unpaidLeaveTypeId:
+        unpaidForDate > 0 ? (unpaidLeaveType?._id ?? null) : null,
+
+      unpaidLeaveTypeName:
+        unpaidForDate > 0 ? (unpaidLeaveType?.name ?? "") : "",
+
+      unpaidLeaveTypeCode:
+        unpaidForDate > 0 ? (unpaidLeaveType?.code ?? "") : "",
     };
   });
 };
@@ -633,16 +783,6 @@ const validateLeaveRequestRules = ({
     throw new ApiError(
       400,
       "Half-day leave is not allowed for this leave type.",
-    );
-  }
-
-  if (
-    Number(leaveType.maximumConsecutiveDays || 0) > 0 &&
-    requestedDays > Number(leaveType.maximumConsecutiveDays)
-  ) {
-    throw new ApiError(
-      400,
-      `This leave type allows a maximum of ${leaveType.maximumConsecutiveDays} consecutive leave days.`,
     );
   }
 
@@ -1134,7 +1274,7 @@ export const createLeaveRequest = async ({
        */
       dateDetails = applyPaidUnpaidAllocationToDates({
         dateDetails,
-        paidDays,
+        balanceAllocations,
         selectedLeaveType: leaveType,
         unpaidLeaveType,
       });
@@ -1579,7 +1719,7 @@ const releaseRequestBalanceIfRequired = async ({
   await releaseReservedLeaveBalance({
     companyId,
     balanceId: request.leaveBalanceId,
-    days: request.requestedDays,
+    days: request.paidDays,
     allocations: request.balanceAllocations ?? [],
     requesterContext,
     session,
@@ -1603,7 +1743,7 @@ const finalizeApprovedLeaveCancellation = async ({
     await restoreConsumedLeaveBalance({
       companyId,
       balanceId: request.leaveBalanceId,
-      days: request.requestedDays,
+      days: request.paidDays,
       allocations: request.balanceAllocations ?? [],
       requesterContext,
       session,
@@ -1853,7 +1993,7 @@ export const approveLeaveRequest = async ({
           await consumeReservedLeaveBalance({
             companyId,
             balanceId: request.leaveBalanceId,
-            days: request.requestedDays,
+            days: request.paidDays,
             allocations: request.balanceAllocations ?? [],
             requesterContext,
             session,
@@ -1872,7 +2012,7 @@ export const approveLeaveRequest = async ({
           await reserveLeaveBalance({
             companyId,
             balanceId: request.leaveBalanceId,
-            days: request.requestedDays,
+            days: request.paidDays,
             allocations: request.balanceAllocations ?? [],
             requesterContext,
             session,
@@ -1881,12 +2021,11 @@ export const approveLeaveRequest = async ({
           await consumeReservedLeaveBalance({
             companyId,
             balanceId: request.leaveBalanceId,
-            days: request.requestedDays,
+            days: request.paidDays,
             allocations: request.balanceAllocations ?? [],
             requesterContext,
             session,
           });
-
           request.balanceStatus = "CONSUMED";
           request.balanceError = "";
         }
