@@ -173,6 +173,53 @@ const findApplicableLeaveType = async ({
 };
 
 /**
+ * Find the company's active unpaid leave type that can be used
+ * as the automatic Loss of Pay fallback.
+ *
+ * We intentionally identify it by payment semantics rather than
+ * hardcoding a code such as "LOP", because companies may name
+ * unpaid leave differently (LOP, LWP, Unpaid Leave, etc.).
+ */
+const findApplicableUnpaidLeaveType = async ({
+  companyId,
+  fromDate,
+  toDate,
+  session,
+}) => {
+  const start = normalizeDateOnly(fromDate);
+  const end = normalizeDateOnly(toDate);
+
+  const unpaidLeaveType = await LeaveType.findOne({
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+    paymentType: "UNPAID",
+
+    effectiveFrom: {
+      $lte: start,
+    },
+
+    $or: [
+      {
+        effectiveTo: null,
+      },
+      {
+        effectiveTo: {
+          $gte: end,
+        },
+      },
+    ],
+  })
+    .sort({
+      effectiveFrom: -1,
+      createdAt: -1,
+    })
+    .session(session);
+
+  return unpaidLeaveType;
+};
+
+/**
  * ============================================================
  * LEAVE POLICY
  * ============================================================
@@ -347,6 +394,216 @@ const buildBalanceAllocations = ({ dateDetails, allocationMethod }) => {
     periodKey,
     days,
   }));
+};
+
+/**
+ * ============================================================
+ * PAID / UNPAID LEAVE ALLOCATION
+ * ============================================================
+ */
+
+/**
+ * Return the YYYY-MM bucket for a leave date.
+ */
+const getPeriodKey = (value) => {
+  const date = normalizeDateOnly(value);
+
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(
+    2,
+    "0",
+  )}`;
+};
+
+/**
+ * Calculate how much paid entitlement is actually usable for
+ * each requested period.
+ *
+ * IMPORTANT:
+ * This does not consume or reserve anything.
+ * It only calculates the maximum amount that may be allocated
+ * as paid leave.
+ */
+const calculateUsablePaidAllocations = ({
+  leaveType,
+  leaveBalance,
+  dateDetails,
+}) => {
+  /**
+   * Unpaid/no-balance leave does not consume paid entitlement.
+   */
+  if (
+    leaveType.paymentType !== "PAID" ||
+    leaveType.requiresBalance !== true ||
+    leaveType.allocationMethod === "NO_BALANCE" ||
+    !leaveBalance
+  ) {
+    return [];
+  }
+
+  const requestedByPeriod = new Map();
+
+  for (const detail of dateDetails) {
+    if (detail.countedAsLeave !== true || Number(detail.leaveDays || 0) <= 0) {
+      continue;
+    }
+
+    const periodKey =
+      leaveType.allocationMethod === "MONTHLY_ACCRUAL"
+        ? getPeriodKey(detail.date)
+        : null;
+
+    const current = requestedByPeriod.get(periodKey) ?? 0;
+
+    requestedByPeriod.set(
+      periodKey,
+      Number((current + Number(detail.leaveDays)).toFixed(2)),
+    );
+  }
+
+  let remainingAggregateAvailable = Math.max(
+    0,
+    calculateAvailableDays(leaveBalance),
+  );
+
+  const allocations = [];
+
+  for (const [periodKey, requestedDays] of requestedByPeriod.entries()) {
+    if (remainingAggregateAvailable <= 0) {
+      break;
+    }
+
+    let usableDays = Math.min(requestedDays, remainingAggregateAvailable);
+
+    /**
+     * MONTHLY_ACCRUAL must additionally respect:
+     *
+     * - the month's credited/adjusted balance
+     * - already pending leave
+     * - already used leave
+     * - lapsed leave
+     * - maximum monthly usage
+     */
+    if (leaveType.allocationMethod === "MONTHLY_ACCRUAL") {
+      const monthlyBalance = leaveBalance.monthlyBalances?.find(
+        (item) => item.periodKey === periodKey,
+      );
+
+      /**
+       * No credited bucket for the requested month means there
+       * is currently no usable paid entitlement for that month.
+       *
+       * Future/projected entitlement can be handled separately
+       * when we implement future-month accrual.
+       */
+      if (!monthlyBalance) {
+        continue;
+      }
+
+      const monthlyAvailable = Math.max(
+        0,
+        Number(
+          (
+            Number(monthlyBalance.creditedDays || 0) +
+            Number(monthlyBalance.adjustedDays || 0) -
+            Number(monthlyBalance.pendingDays || 0) -
+            Number(monthlyBalance.usedDays || 0) -
+            Number(monthlyBalance.lapsedDays || 0)
+          ).toFixed(2),
+        ),
+      );
+
+      usableDays = Math.min(usableDays, monthlyAvailable);
+
+      if (leaveType.maximumMonthlyUsageDays != null) {
+        const alreadyCommitted =
+          Number(monthlyBalance.usedDays || 0) +
+          Number(monthlyBalance.pendingDays || 0);
+
+        const remainingMonthlyUsage = Math.max(
+          0,
+          Number(leaveType.maximumMonthlyUsageDays) - alreadyCommitted,
+        );
+
+        usableDays = Math.min(usableDays, remainingMonthlyUsage);
+      }
+    }
+
+    usableDays = Number(Math.max(0, usableDays).toFixed(2));
+
+    if (usableDays <= 0) {
+      continue;
+    }
+
+    allocations.push({
+      periodKey,
+      days: usableDays,
+    });
+
+    remainingAggregateAvailable = Number(
+      (remainingAggregateAvailable - usableDays).toFixed(2),
+    );
+  }
+
+  return allocations;
+};
+
+/**
+ * Apply the calculated paid entitlement to individual dates.
+ *
+ * Allocation is deterministic:
+ * earliest counted leave dates consume the selected paid
+ * entitlement first; remaining counted leave becomes LOP.
+ */
+const applyPaidUnpaidAllocationToDates = ({
+  dateDetails,
+  paidDays,
+  selectedLeaveType,
+  unpaidLeaveType,
+}) => {
+  let remainingPaidDays = Number(paidDays || 0);
+
+  return dateDetails.map((detail) => {
+    /**
+     * Excluded/non-counted dates have no financial leave allocation.
+     */
+    if (detail.countedAsLeave !== true || Number(detail.leaveDays || 0) <= 0) {
+      return {
+        ...detail,
+        allocationType: "NOT_APPLICABLE",
+        allocatedLeaveTypeId: null,
+        allocatedLeaveTypeName: "",
+        allocatedLeaveTypeCode: "",
+      };
+    }
+
+    const leaveDays = Number(detail.leaveDays);
+
+    /**
+     * Current V1 date portions are 1 or 0.5 day.
+     *
+     * Because paid entitlement also moves in 0.5-day increments,
+     * a date can be assigned completely to PAID or UNPAID.
+     */
+    if (remainingPaidDays >= leaveDays) {
+      remainingPaidDays = Number((remainingPaidDays - leaveDays).toFixed(2));
+
+      return {
+        ...detail,
+        allocationType: "PAID",
+        allocatedLeaveTypeId: selectedLeaveType._id,
+        allocatedLeaveTypeName: selectedLeaveType.name,
+        allocatedLeaveTypeCode: selectedLeaveType.code,
+      };
+    }
+
+    return {
+      ...detail,
+      allocationType: "UNPAID",
+      allocatedLeaveTypeId: unpaidLeaveType?._id ?? null,
+      allocatedLeaveTypeName: unpaidLeaveType?.name ?? "Loss of Pay",
+      allocatedLeaveTypeCode: unpaidLeaveType?.code ?? "LOP",
+    };
+  });
 };
 
 /**
@@ -729,7 +986,7 @@ export const createLeaveRequest = async ({
         leavePolicy,
       });
 
-      const dateDetails = buildLeaveDateDetails({
+      let dateDetails = buildLeaveDateDetails({
         fromDate,
         toDate,
 
@@ -739,11 +996,6 @@ export const createLeaveRequest = async ({
       });
 
       const requestedDays = calculateRequestedDays(dateDetails);
-
-      const balanceAllocations = buildBalanceAllocations({
-        dateDetails,
-        allocationMethod: leaveType.allocationMethod,
-      });
 
       if (requestedDays <= 0) {
         throw new ApiError(
@@ -776,57 +1028,131 @@ export const createLeaveRequest = async ({
       }
 
       let leaveBalance = null;
-
       let balanceStatus = "NOT_REQUIRED";
+
+      let balanceAllocations = [];
+
+      let paidDays = 0;
+      let unpaidDays = 0;
+
+      let unpaidLeaveType = null;
+
       /**
-       * Balance-backed leave.
+       * ============================================================
+       * CALCULATE PAID / UNPAID ALLOCATION
+       * ============================================================
        */
-      if (
-        leaveType.requiresBalance === true &&
-        leaveType.allocationMethod !== "NO_BALANCE"
-      ) {
-        balanceStatus = "PENDING_RESERVATION";
-        leaveBalance = await findOrCreateApplicableLeaveBalance({
-          companyId,
 
-          employeeId: employee._id,
+      /**
+       * Employee directly selected an unpaid leave type.
+       *
+       * The complete request is unpaid and no paid leave balance
+       * is involved.
+       */
+      if (leaveType.paymentType === "UNPAID") {
+        paidDays = 0;
+        unpaidDays = requestedDays;
 
-          companyAccessId: companyAccess._id,
-
-          leaveType,
-
-          leavePolicy,
-
-          requestDate: fromDate,
-
-          requesterContext,
-
-          session,
-        });
-
-        const availableDays = calculateAvailableDays(leaveBalance);
-
+        unpaidLeaveType = leaveType;
+      } else {
+        /**
+         * Selected leave type is paid.
+         *
+         * If the leave type uses entitlement/balance, determine how
+         * much of the request can actually be covered by that
+         * entitlement.
+         */
         if (
-          leaveType.allowNegativeBalance !== true &&
-          availableDays < requestedDays
+          leaveType.requiresBalance === true &&
+          leaveType.allocationMethod !== "NO_BALANCE"
         ) {
-          throw new ApiError(
-            409,
-            `Insufficient leave balance. Available: ${availableDays}, requested: ${requestedDays}.`,
+          leaveBalance = await findOrCreateApplicableLeaveBalance({
+            companyId,
+
+            employeeId: employee._id,
+
+            companyAccessId: companyAccess._id,
+
+            leaveType,
+
+            leavePolicy,
+
+            requestDate: fromDate,
+
+            requesterContext,
+
+            session,
+          });
+
+          balanceAllocations = calculateUsablePaidAllocations({
+            leaveType,
+            leaveBalance,
+            dateDetails,
+          });
+
+          paidDays = Number(
+            balanceAllocations
+              .reduce(
+                (total, allocation) => total + Number(allocation.days || 0),
+                0,
+              )
+              .toFixed(2),
           );
+        } else {
+          /**
+           * A PAID leave type that does not require a balance is
+           * considered fully paid.
+           */
+          paidDays = requestedDays;
         }
 
+        unpaidDays = Number(Math.max(0, requestedDays - paidDays).toFixed(2));
+
         /**
-         * Some companies reserve entitlement immediately when
-         * the employee submits the request.
-         *
-         * Others wait until approval before consuming the balance.
+         * If paid entitlement cannot cover the complete request,
+         * resolve the company's configured unpaid leave type.
          */
+        if (unpaidDays > 0) {
+          unpaidLeaveType = await findApplicableUnpaidLeaveType({
+            companyId,
+            fromDate,
+            toDate,
+            session,
+          });
+
+          if (!unpaidLeaveType) {
+            throw new ApiError(
+              409,
+              "The selected paid leave entitlement cannot cover the full request, and no active unpaid leave type is configured for the remaining days.",
+            );
+          }
+        }
+      }
+
+      /**
+       * Store the actual financial allocation against each date.
+       */
+      dateDetails = applyPaidUnpaidAllocationToDates({
+        dateDetails,
+        paidDays,
+        selectedLeaveType: leaveType,
+        unpaidLeaveType,
+      });
+
+      /**
+       * ============================================================
+       * RESERVE ONLY THE PAID ENTITLEMENT
+       * ============================================================
+       */
+
+      if (leaveBalance && paidDays > 0) {
+        balanceStatus = "PENDING_RESERVATION";
+
         if (leavePolicy.reserveBalanceOnSubmission === true) {
           await reserveLeaveBalance({
             companyId,
             balanceId: leaveBalance._id,
-            days: requestedDays,
+            days: paidDays,
             allocations: balanceAllocations,
             requesterContext,
             session,
@@ -835,7 +1161,6 @@ export const createLeaveRequest = async ({
           balanceStatus = "RESERVED";
         }
       }
-
       const now = new Date();
 
       const [request] = await LeaveRequest.create(
@@ -878,6 +1203,10 @@ export const createLeaveRequest = async ({
 
             requestedDays,
 
+            paidDays,
+
+            unpaidDays,
+
             reason: data.reason,
 
             attachmentUrl: data.attachmentUrl ?? "",
@@ -890,7 +1219,8 @@ export const createLeaveRequest = async ({
 
             attendanceApplicationStatus: "NOT_APPLIED",
 
-            payrollAdjustmentRequired: leaveType.paymentType === "UNPAID",
+            // payrollAdjustmentRequired: leaveType.paymentType === "UNPAID",
+            payrollAdjustmentRequired: unpaidDays > 0,
 
             statusHistory: [
               {

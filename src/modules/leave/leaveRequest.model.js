@@ -58,6 +58,59 @@ const leaveDateDetailSchema = new mongoose.Schema(
       default: true,
     },
 
+    /**
+     * How this specific leave date is financially allocated.
+     *
+     * PAID:
+     *   Covered by the employee's selected paid leave entitlement.
+     *
+     * UNPAID:
+     *   Not covered by the selected paid entitlement and therefore
+     *   treated as Loss of Pay.
+     *
+     * NOT_APPLICABLE:
+     *   Date is not counted as leave, for example an excluded
+     *   weekly off or public holiday.
+     */
+    allocationType: {
+      type: String,
+      enum: ["PAID", "UNPAID", "NOT_APPLICABLE"],
+      default: "PAID",
+    },
+
+    /**
+     * Snapshot/reference of the actual leave type applied to this date.
+     *
+     * For paid dates this will normally be the leave type selected
+     * by the employee.
+     *
+     * For unpaid overflow dates this will reference the configured
+     * Loss of Pay / unpaid leave type.
+     */
+    allocatedLeaveTypeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "LeaveType",
+      default: null,
+    },
+
+    allocatedLeaveTypeName: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: [
+        100,
+        "Allocated leave type name cannot exceed 100 characters.",
+      ],
+    },
+
+    allocatedLeaveTypeCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+      maxlength: [30, "Allocated leave type code cannot exceed 30 characters."],
+    },
+
     attendanceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Attendance",
@@ -294,6 +347,32 @@ const leaveRequestSchema = new mongoose.Schema(
       required: [true, "Requested leave days are required."],
       min: [0.5, "A leave request must contain at least 0.5 leave days."],
       max: [366, "A leave request cannot exceed 366 leave days."],
+      validate: halfDayIncrementValidator,
+    },
+
+    /**
+     * Number of requested leave days covered by the selected
+     * paid leave entitlement.
+     *
+     * For a fully unpaid request this will be 0.
+     */
+    paidDays: {
+      type: Number,
+      default: 0,
+      min: [0, "Paid leave days cannot be negative."],
+      validate: halfDayIncrementValidator,
+    },
+
+    /**
+     * Number of requested leave days treated as unpaid / Loss of Pay.
+     *
+     * A request may therefore contain both paidDays and unpaidDays
+     * while still remaining a single leave request.
+     */
+    unpaidDays: {
+      type: Number,
+      default: 0,
+      min: [0, "Unpaid leave days cannot be negative."],
       validate: halfDayIncrementValidator,
     },
 
@@ -672,9 +751,20 @@ leaveRequestSchema.pre("validate", function () {
     );
   }
 
-  if (this.paymentType === "UNPAID") {
-    this.payrollAdjustmentRequired = true;
+  const totalAllocatedDays = Number(
+    (Number(this.paidDays || 0) + Number(this.unpaidDays || 0)).toFixed(2),
+  );
+
+  if (
+    Number(this.requestedDays || 0) > 0 &&
+    Math.abs(totalAllocatedDays - Number(this.requestedDays)) > 0.001
+  ) {
+    throw new Error(
+      "Paid and unpaid leave days must equal the total requested leave days.",
+    );
   }
+
+  this.payrollAdjustmentRequired = Number(this.unpaidDays || 0) > 0;
 
   if (this.status === "RECOMMENDED" && !this.recommendedAt) {
     throw new Error(
