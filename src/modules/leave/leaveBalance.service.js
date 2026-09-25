@@ -446,7 +446,8 @@ export const listLeaveBalances = async ({
       })
       .populate({
         path: "leaveTypeId",
-        select: "name code paymentType allocationMethod status",
+        select:
+          "name code paymentType requiresBalance allocationMethod monthlyEntitlementDays maximumMonthlyUsageDays allowMonthlyAccumulation status",
       })
       .populate({
         path: "leavePolicyId",
@@ -520,7 +521,8 @@ export const getLeaveBalanceById = async ({ companyId, balanceId }) => {
     })
     .populate({
       path: "leaveTypeId",
-      select: "name code paymentType allocationMethod status",
+      select:
+        "name code paymentType requiresBalance allocationMethod monthlyEntitlementDays maximumMonthlyUsageDays allowMonthlyAccumulation status",
     })
     .populate({
       path: "leavePolicyId",
@@ -586,7 +588,8 @@ export const getEmployeeLeaveBalances = async ({
   return LeaveBalance.find(filter)
     .populate({
       path: "leaveTypeId",
-      select: "name code paymentType allocationMethod allowHalfDay status",
+      select:
+        "name code paymentType requiresBalance allocationMethod monthlyEntitlementDays maximumMonthlyUsageDays allowMonthlyAccumulation allowHalfDay status",
     })
     .populate({
       path: "leavePolicyId",
@@ -729,6 +732,8 @@ export const adjustLeaveBalance = async ({
 
       balance.adjustmentHistory.push({
         adjustmentDays: adjustment,
+        periodKey:
+          balance.allocationMethod === "MONTHLY_ACCRUAL" ? periodKey : null,
         reason,
         adjustedBy: requesterContext.userId,
         adjustedAt: new Date(),
