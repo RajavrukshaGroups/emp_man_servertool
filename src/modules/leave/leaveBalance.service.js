@@ -5,6 +5,7 @@ import LeaveType from "./leaveType.model.js";
 import LeavePolicy from "./leavePolicy.model.js";
 import Employee from "../employees/employee.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
+import User from "../users/user.model.js";
 
 import { ApiError } from "../../utils/ApiError.js";
 
@@ -336,6 +337,495 @@ export const createLeaveBalance = async ({
 
 /**
  * ============================================================
+ * BULK INITIALIZE LEAVE BALANCES
+ * ============================================================
+ *
+ * Creates only missing leave balances for eligible ACTIVE employees.
+ *
+ * employeeIds:
+ * - [] / omitted -> all eligible ACTIVE employees in the company
+ * - supplied     -> only those eligible ACTIVE employees
+ *
+ * This operation is intentionally idempotent:
+ * existing employee/type/year balances are skipped.
+ */
+export const initializeBulkLeaveBalances = async ({
+  companyId,
+  leavePolicyId,
+  leaveYearStart,
+  leaveYearEnd,
+  leaveYearLabel,
+  employeeIds = [],
+  requesterContext,
+}) => {
+  const start = new Date(leaveYearStart);
+  const end = new Date(leaveYearEnd);
+
+  if (end < start) {
+    throw new ApiError(
+      400,
+      "Leave year end cannot be before leave year start.",
+    );
+  }
+
+  /**
+   * ------------------------------------------------------------
+   * 1. Resolve the selected active policy once.
+   * ------------------------------------------------------------
+   */
+  const leavePolicy = await LeavePolicy.findOne({
+    _id: leavePolicyId,
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+  }).lean();
+
+  if (!leavePolicy) {
+    throw new ApiError(404, "Active leave policy not found.");
+  }
+
+  if (
+    new Date(leavePolicy.effectiveFrom) > start ||
+    (leavePolicy.effectiveTo && new Date(leavePolicy.effectiveTo) < start)
+  ) {
+    throw new ApiError(
+      400,
+      "The selected leave policy is not effective for this leave year.",
+    );
+  }
+
+  /**
+   * ------------------------------------------------------------
+   * 2. Find applicable balance-based leave types once.
+   * ------------------------------------------------------------
+   */
+  const leaveTypes = await LeaveType.find({
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+    requiresBalance: true,
+    allocationMethod: {
+      $ne: "NO_BALANCE",
+    },
+
+    /**
+     * Leave type must overlap the requested leave year.
+     *
+     * Example:
+     * Leave year: 2026-01-01 -> 2026-12-31
+     * Leave type effective from: 2026-09-23
+     *
+     * This leave type is applicable for part of the leave year
+     * and therefore still needs a balance.
+     */
+    effectiveFrom: {
+      $lte: end,
+    },
+
+    $or: [
+      {
+        effectiveTo: null,
+      },
+      {
+        effectiveTo: {
+          $gte: start,
+        },
+      },
+    ],
+  })
+    .select(
+      "_id name code allocationMethod annualEntitlementDays carryForwardEnabled",
+    )
+    .lean();
+
+  if (leaveTypes.length === 0) {
+    throw new ApiError(
+      409,
+      "No applicable balance-based leave types were found for this leave year.",
+    );
+  }
+
+  /**
+   * ------------------------------------------------------------
+   * 3. Resolve ACTIVE company-access records.
+   * ------------------------------------------------------------
+   */
+  const accessFilter = {
+    companyId,
+    status: "ACTIVE",
+    isDeleted: false,
+  };
+
+  /**
+   * When specific employeeIds are supplied, first resolve their
+   * Employee records so we can restrict CompanyAccess safely.
+   */
+  let requestedEmployeeMap = null;
+
+  if (employeeIds.length > 0) {
+    const requestedEmployees = await Employee.find({
+      _id: {
+        $in: employeeIds,
+      },
+      companyId,
+      status: "ACTIVE",
+      isDeleted: false,
+    })
+      .select("_id companyAccessId")
+      .lean();
+
+    requestedEmployeeMap = new Map(
+      requestedEmployees.map((employee) => [
+        employee.companyAccessId.toString(),
+        employee,
+      ]),
+    );
+
+    accessFilter._id = {
+      $in: requestedEmployees.map((employee) => employee.companyAccessId),
+    };
+  }
+
+  /**
+   * ------------------------------------------------------------
+   * 4. Process employees in batches.
+   * ------------------------------------------------------------
+   *
+   * We deliberately do not load an unlimited company workforce
+   * into memory at once.
+   */
+  const BATCH_SIZE = 500;
+
+  let lastAccessId = null;
+
+  let processedEmployees = 0;
+  let created = 0;
+  let skippedExisting = 0;
+
+  const failures = [];
+
+  while (true) {
+    const batchFilter = {
+      ...accessFilter,
+    };
+
+    if (lastAccessId) {
+      batchFilter._id = accessFilter._id
+        ? {
+            ...accessFilter._id,
+            $gt: lastAccessId,
+          }
+        : {
+            $gt: lastAccessId,
+          };
+    }
+
+    const companyAccessBatch = await CompanyAccess.find(batchFilter)
+      .select("_id companyId status")
+      .sort({
+        _id: 1,
+      })
+      .limit(BATCH_SIZE)
+      .lean();
+
+    if (companyAccessBatch.length === 0) {
+      break;
+    }
+
+    lastAccessId = companyAccessBatch[companyAccessBatch.length - 1]._id;
+
+    const accessIds = companyAccessBatch.map((access) => access._id);
+
+    /**
+     * For an all-company initialization we still verify that the
+     * corresponding Employee record itself is ACTIVE.
+     */
+    let employees;
+
+    if (requestedEmployeeMap) {
+      employees = companyAccessBatch
+        .map((access) => requestedEmployeeMap.get(access._id.toString()))
+        .filter(Boolean);
+    } else {
+      employees = await Employee.find({
+        companyId,
+        companyAccessId: {
+          $in: accessIds,
+        },
+        status: "ACTIVE",
+        isDeleted: false,
+      })
+        .select("_id companyAccessId")
+        .lean();
+    }
+
+    if (employees.length === 0) {
+      continue;
+    }
+
+    processedEmployees += employees.length;
+
+    const employeeAccessIds = employees.map(
+      (employee) => employee.companyAccessId,
+    );
+
+    /**
+     * ----------------------------------------------------------
+     * 5. Read existing balances for this employee batch.
+     * ----------------------------------------------------------
+     */
+    const existingBalances = await LeaveBalance.find({
+      companyId,
+
+      companyAccessId: {
+        $in: employeeAccessIds,
+      },
+
+      leaveTypeId: {
+        $in: leaveTypes.map((leaveType) => leaveType._id),
+      },
+
+      leaveYearStart: start,
+
+      isDeleted: false,
+    })
+      .select("companyAccessId leaveTypeId")
+      .lean();
+
+    const existingKeys = new Set(
+      existingBalances.map(
+        (balance) =>
+          `${balance.companyAccessId.toString()}:${balance.leaveTypeId.toString()}`,
+      ),
+    );
+
+    /**
+     * ----------------------------------------------------------
+     * 6. Build only missing employee/type combinations.
+     * ----------------------------------------------------------
+     */
+    const operations = [];
+
+    for (const employee of employees) {
+      for (const leaveType of leaveTypes) {
+        const key = `${employee.companyAccessId.toString()}:${leaveType._id.toString()}`;
+
+        if (existingKeys.has(key)) {
+          skippedExisting += 1;
+          continue;
+        }
+
+        const allocatedDays =
+          leaveType.allocationMethod === "ANNUAL_UPFRONT"
+            ? Number(leaveType.annualEntitlementDays || 0)
+            : 0;
+
+        operations.push({
+          updateOne: {
+            filter: {
+              companyId,
+              companyAccessId: employee.companyAccessId,
+              leaveTypeId: leaveType._id,
+              leaveYearStart: start,
+              isDeleted: false,
+            },
+
+            update: {
+              $setOnInsert: {
+                companyId,
+
+                employeeId: employee._id,
+                companyAccessId: employee.companyAccessId,
+
+                leaveTypeId: leaveType._id,
+                leavePolicyId: leavePolicy._id,
+
+                leaveYearStart: start,
+                leaveYearEnd: end,
+                leaveYearLabel,
+
+                allocationMethod: leaveType.allocationMethod,
+
+                allocatedDays,
+                accruedDays: 0,
+                carriedForwardDays: 0,
+                adjustedDays: 0,
+                pendingDays: 0,
+                usedDays: 0,
+                lapsedDays: 0,
+
+                monthlyBalances: [],
+                adjustmentHistory: [],
+
+                lastAccruedPeriodKey: null,
+
+                status: "ACTIVE",
+
+                createdBy: requesterContext.userId ?? null,
+                updatedBy: requesterContext.userId ?? null,
+
+                isDeleted: false,
+              },
+            },
+
+            upsert: true,
+          },
+        });
+      }
+    }
+
+    if (operations.length === 0) {
+      continue;
+    }
+
+    /**
+     * ----------------------------------------------------------
+     * 7. Upsert missing balances in one database operation.
+     * ----------------------------------------------------------
+     *
+     * ordered:false prevents one isolated write failure from
+     * stopping unrelated employee balances in this batch.
+     */
+    try {
+      const result = await LeaveBalance.bulkWrite(operations, {
+        ordered: false,
+      });
+
+      const insertedCount = Number(result.upsertedCount ?? 0);
+
+      created += insertedCount;
+
+      /**
+       * Another concurrent initializer may have inserted a balance
+       * after our existence check but before bulkWrite.
+       *
+       * Upsert + unique database index protects correctness.
+       */
+      skippedExisting += operations.length - insertedCount;
+    } catch (error) {
+      /**
+       * Duplicate-key races are safe because another operation
+       * successfully created that same logical balance.
+       */
+      if (error?.code === 11000) {
+        const insertedCount = Number(error?.result?.upsertedCount ?? 0);
+
+        created += insertedCount;
+        skippedExisting += operations.length - insertedCount;
+      } else {
+        failures.push({
+          batchAfterCompanyAccessId: lastAccessId?.toString() ?? null,
+          message:
+            error?.message ??
+            "Unknown bulk leave balance initialization error.",
+        });
+      }
+    }
+  }
+
+  const possibleBalances = processedEmployees * leaveTypes.length;
+
+  return {
+    processedEmployees,
+
+    processedLeaveTypes: leaveTypes.length,
+
+    possibleBalances,
+
+    created,
+
+    skippedExisting,
+
+    failedBatches: failures.length,
+
+    failures,
+  };
+};
+
+/**
+ * Apply a requested companyAccessId without allowing it to
+ * expand or override the requester's authorized scope.
+ *
+ * scopeFilter is authoritative.
+ * Query filters may only narrow that scope.
+ */
+const applyCompanyAccessScope = ({
+  filter,
+  scopeFilter = {},
+  requestedCompanyAccessId = null,
+  castObjectId = false,
+}) => {
+  const authorizedCompanyAccess = scopeFilter.companyAccessId;
+
+  const castId = (value) =>
+    castObjectId ? new mongoose.Types.ObjectId(value.toString()) : value;
+
+  /**
+   * No scope restriction means COMPANY/GLOBAL access.
+   * The requested companyAccessId may safely narrow the query.
+   */
+  if (!authorizedCompanyAccess) {
+    if (requestedCompanyAccessId) {
+      filter.companyAccessId = castId(requestedCompanyAccessId);
+    }
+
+    return;
+  }
+
+  /**
+   * Restricted scope using $in.
+   *
+   * If the caller also requested one companyAccessId,
+   * require BOTH conditions instead of replacing the scope.
+   */
+  if (authorizedCompanyAccess.$in) {
+    const authorizedIds = authorizedCompanyAccess.$in.map(castId);
+
+    if (requestedCompanyAccessId) {
+      const requestedId = castId(requestedCompanyAccessId);
+
+      filter.$and = [
+        ...(filter.$and ?? []),
+        {
+          companyAccessId: {
+            $in: authorizedIds,
+          },
+        },
+        {
+          companyAccessId: requestedId,
+        },
+      ];
+    } else {
+      filter.companyAccessId = {
+        $in: authorizedIds,
+      };
+    }
+
+    return;
+  }
+
+  /**
+   * Restricted scope containing one companyAccessId.
+   */
+  const authorizedId = castId(authorizedCompanyAccess);
+
+  if (requestedCompanyAccessId) {
+    filter.$and = [
+      ...(filter.$and ?? []),
+      {
+        companyAccessId: authorizedId,
+      },
+      {
+        companyAccessId: castId(requestedCompanyAccessId),
+      },
+    ];
+  } else {
+    filter.companyAccessId = authorizedId;
+  }
+};
+
+/**
+ * ============================================================
  * LIST BALANCES
  * ============================================================
  */
@@ -348,6 +838,7 @@ export const listLeaveBalances = async ({
   const {
     page = 1,
     limit = 20,
+    search,
     employeeId,
     companyAccessId,
     leaveTypeId,
@@ -363,21 +854,17 @@ export const listLeaveBalances = async ({
   const filter = {
     companyId,
     isDeleted: false,
-
-    /**
-     * TEAM/EMPLOYEE visibility restrictions can be injected
-     * by the scope resolver/service layer.
-     */
-    ...scopeFilter,
   };
 
   if (employeeId) {
     filter.employeeId = employeeId;
   }
 
-  if (companyAccessId) {
-    filter.companyAccessId = companyAccessId;
-  }
+  applyCompanyAccessScope({
+    filter,
+    scopeFilter,
+    requestedCompanyAccessId: companyAccessId,
+  });
 
   if (leaveTypeId) {
     filter.leaveTypeId = leaveTypeId;
@@ -405,6 +892,116 @@ export const listLeaveBalances = async ({
     if (leaveYearEnd) {
       filter.leaveYearStart.$lte = new Date(leaveYearEnd);
     }
+  }
+
+  if (search) {
+    const searchRegex = new RegExp(
+      search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      "i",
+    );
+
+    /**
+     * Search user names first.
+     *
+     * Employee does not store the employee's name directly;
+     * it references User through userId.
+     */
+    const matchingUsers = await User.find({
+      isDeleted: false,
+      $or: [
+        { firstName: searchRegex },
+        { middleName: searchRegex },
+        { lastName: searchRegex },
+        { displayName: searchRegex },
+      ],
+    })
+      .select("_id")
+      .lean();
+
+    const matchingUserIds = matchingUsers.map((user) => user._id);
+
+    /**
+     * Resolve employees whose linked User matched the search.
+     *
+     * companyId is mandatory here so search never crosses companies.
+     */
+    const matchingEmployees =
+      matchingUserIds.length > 0
+        ? await Employee.find({
+            companyId,
+            userId: {
+              $in: matchingUserIds,
+            },
+            isDeleted: false,
+          })
+            .select("_id")
+            .lean()
+        : [];
+
+    const matchingEmployeeIds = matchingEmployees.map(
+      (employee) => employee._id,
+    );
+
+    /**
+     * Employee code belongs to CompanyAccess.
+     */
+    const matchingCompanyAccessRecords = await CompanyAccess.find({
+      companyId,
+      employeeCode: searchRegex,
+      isDeleted: false,
+    })
+      .select("_id")
+      .lean();
+
+    const matchingCompanyAccessIds = matchingCompanyAccessRecords.map(
+      (access) => access._id,
+    );
+
+    /**
+     * Leave type name/code search.
+     */
+    const matchingLeaveTypes = await LeaveType.find({
+      companyId,
+      isDeleted: false,
+      $or: [{ name: searchRegex }, { code: searchRegex }],
+    })
+      .select("_id")
+      .lean();
+
+    const matchingLeaveTypeIds = matchingLeaveTypes.map(
+      (leaveType) => leaveType._id,
+    );
+
+    /**
+     * Search must NARROW the existing balance filter.
+     *
+     * It must never replace:
+     * - companyId
+     * - authorization scope
+     * - explicit filters
+     */
+    filter.$and = [
+      ...(filter.$and ?? []),
+      {
+        $or: [
+          {
+            employeeId: {
+              $in: matchingEmployeeIds,
+            },
+          },
+          {
+            companyAccessId: {
+              $in: matchingCompanyAccessIds,
+            },
+          },
+          {
+            leaveTypeId: {
+              $in: matchingLeaveTypeIds,
+            },
+          },
+        ],
+      },
+    ];
   }
 
   const skip = (page - 1) * limit;
@@ -477,6 +1074,276 @@ export const listLeaveBalances = async ({
       hasPreviousPage: page > 1,
     },
   };
+};
+
+/**
+ * ============================================================
+ * GET LEAVE BALANCE SUMMARY
+ * ============================================================
+ *
+ * Returns aggregate totals for leave balances visible to the
+ * authenticated requester.
+ *
+ * IMPORTANT:
+ * scopeFilter must come from the same scope resolver used by
+ * listLeaveBalances so COMPANY / TEAM / SELF visibility remains
+ * consistent.
+ */
+export const getLeaveBalanceSummary = async ({
+  companyId,
+  query = {},
+  scopeFilter = {},
+}) => {
+  const {
+    employeeId,
+    companyAccessId,
+    leaveTypeId,
+    leavePolicyId,
+    allocationMethod,
+    status,
+    leaveYearStart,
+    leaveYearEnd,
+  } = query;
+
+  const filter = {
+    companyId: new mongoose.Types.ObjectId(companyId),
+    isDeleted: false,
+  };
+
+  applyCompanyAccessScope({
+    filter,
+    scopeFilter,
+    requestedCompanyAccessId: companyAccessId,
+    castObjectId: true,
+  });
+
+  if (employeeId) {
+    filter.employeeId = new mongoose.Types.ObjectId(employeeId);
+  }
+
+  if (leaveTypeId) {
+    filter.leaveTypeId = new mongoose.Types.ObjectId(leaveTypeId);
+  }
+
+  if (leavePolicyId) {
+    filter.leavePolicyId = new mongoose.Types.ObjectId(leavePolicyId);
+  }
+
+  if (allocationMethod) {
+    filter.allocationMethod = allocationMethod;
+  }
+
+  if (status) {
+    filter.status = status;
+  }
+
+  if (leaveYearStart || leaveYearEnd) {
+    filter.leaveYearStart = {};
+
+    if (leaveYearStart) {
+      filter.leaveYearStart.$gte = new Date(leaveYearStart);
+    }
+
+    if (leaveYearEnd) {
+      filter.leaveYearStart.$lte = new Date(leaveYearEnd);
+    }
+  }
+
+  // keep your existing aggregation below unchanged
+  const [summary] = await LeaveBalance.aggregate([
+    {
+      $match: filter,
+    },
+    {
+      $group: {
+        _id: null,
+
+        totalBalances: {
+          $sum: 1,
+        },
+
+        availableDays: {
+          $sum: {
+            $cond: [
+              {
+                $eq: ["$allocationMethod", "MONTHLY_ACCRUAL"],
+              },
+
+              // MONTHLY ACCRUAL:
+              // Count only buckets that have actually been accrued/credited.
+              // Future projected reservation buckets must not reduce
+              // currently available leave.
+              {
+                $sum: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: {
+                          $ifNull: ["$monthlyBalances", []],
+                        },
+                        as: "month",
+                        cond: {
+                          $or: [
+                            {
+                              $eq: ["$$month.isAccrued", true],
+                            },
+                            {
+                              $gt: [
+                                {
+                                  $ifNull: ["$$month.creditedDays", 0],
+                                },
+                                0,
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                    },
+
+                    as: "month",
+
+                    in: {
+                      $let: {
+                        vars: {
+                          monthAvailable: {
+                            $subtract: [
+                              {
+                                $add: [
+                                  {
+                                    $ifNull: ["$$month.creditedDays", 0],
+                                  },
+                                  {
+                                    $ifNull: ["$$month.adjustedDays", 0],
+                                  },
+                                ],
+                              },
+                              {
+                                $add: [
+                                  {
+                                    $ifNull: ["$$month.pendingDays", 0],
+                                  },
+                                  {
+                                    $ifNull: ["$$month.usedDays", 0],
+                                  },
+                                  {
+                                    $ifNull: ["$$month.lapsedDays", 0],
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+
+                        in: {
+                          $cond: [
+                            {
+                              $gt: ["$$monthAvailable", 0],
+                            },
+                            "$$monthAvailable",
+                            0,
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+
+              // ANNUAL_UPFRONT / MANUAL etc.
+              {
+                $let: {
+                  vars: {
+                    balanceAvailable: {
+                      $subtract: [
+                        {
+                          $add: [
+                            {
+                              $ifNull: ["$allocatedDays", 0],
+                            },
+                            {
+                              $ifNull: ["$accruedDays", 0],
+                            },
+                            {
+                              $ifNull: ["$carriedForwardDays", 0],
+                            },
+                            {
+                              $ifNull: ["$adjustedDays", 0],
+                            },
+                          ],
+                        },
+                        {
+                          $add: [
+                            {
+                              $ifNull: ["$pendingDays", 0],
+                            },
+                            {
+                              $ifNull: ["$usedDays", 0],
+                            },
+                            {
+                              $ifNull: ["$lapsedDays", 0],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+
+                  in: {
+                    $cond: [
+                      {
+                        $gt: ["$$balanceAvailable", 0],
+                      },
+                      "$$balanceAvailable",
+                      0,
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        },
+
+        pendingDays: {
+          $sum: {
+            $ifNull: ["$pendingDays", 0],
+          },
+        },
+
+        usedDays: {
+          $sum: {
+            $ifNull: ["$usedDays", 0],
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        totalBalances: 1,
+
+        availableDays: {
+          $round: ["$availableDays", 2],
+        },
+
+        pendingDays: {
+          $round: ["$pendingDays", 2],
+        },
+
+        usedDays: {
+          $round: ["$usedDays", 2],
+        },
+      },
+    },
+  ]);
+
+  return (
+    summary ?? {
+      totalBalances: 0,
+      availableDays: 0,
+      pendingDays: 0,
+      usedDays: 0,
+    }
+  );
 };
 
 /**
@@ -805,9 +1672,18 @@ export const accrueMonthlyLeaveBalance = async ({
 
     /**
      * Idempotency:
-     * do not credit the same month twice.
+     *
+     * A bucket may already exist because a future leave request reserved
+     * projected entitlement against this month.
+     *
+     * Only an ACTUALLY accrued bucket should prevent another accrual.
      */
-    if (existingMonthlyBalance) {
+    const existingBucketIsAccrued =
+      existingMonthlyBalance &&
+      (existingMonthlyBalance.isAccrued === true ||
+        Number(existingMonthlyBalance.creditedDays || 0) > 0);
+
+    if (existingBucketIsAccrued) {
       updatedBalance = balance;
       return;
     }
@@ -825,6 +1701,47 @@ export const accrueMonthlyLeaveBalance = async ({
     }
 
     /**
+     * The requested accrual month must overlap the leave type's
+     * effective date range.
+     *
+     * Example:
+     * Leave type effectiveFrom: 2026-09-23
+     * Requested accrual period: 2026-09
+     *
+     * September is valid because the leave type becomes effective
+     * during that month.
+     *
+     * August 2026 is invalid because the leave type was not yet
+     * effective during that month.
+     */
+    const periodEnd = new Date(
+      Date.UTC(
+        periodStart.getUTCFullYear(),
+        periodStart.getUTCMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+        999,
+      ),
+    );
+
+    const leaveTypeEffectiveFrom = new Date(leaveType.effectiveFrom);
+    const leaveTypeEffectiveTo = leaveType.effectiveTo
+      ? new Date(leaveType.effectiveTo)
+      : null;
+
+    if (
+      periodEnd < leaveTypeEffectiveFrom ||
+      (leaveTypeEffectiveTo && periodStart > leaveTypeEffectiveTo)
+    ) {
+      throw new ApiError(
+        400,
+        `The leave type is not effective for accrual period ${periodKey}.`,
+      );
+    }
+
+    /**
      * Use-it-or-lose-it monthly leave.
      *
      * Before crediting the next period, lapse any unused
@@ -834,6 +1751,17 @@ export const accrueMonthlyLeaveBalance = async ({
     if (leaveType.allowMonthlyAccumulation === false) {
       for (const monthlyBalance of balance.monthlyBalances) {
         if (monthlyBalance.periodKey >= periodKey) {
+          continue;
+        }
+
+        // Only an actually accrued month can lapse.
+        // A projected bucket may exist only because future leave
+        // was reserved against that month's expected entitlement.
+        const monthlyBucketIsAccrued =
+          monthlyBalance.isAccrued === true ||
+          Number(monthlyBalance.creditedDays || 0) > 0;
+
+        if (!monthlyBucketIsAccrued) {
           continue;
         }
 
@@ -867,19 +1795,31 @@ export const accrueMonthlyLeaveBalance = async ({
       );
     }
 
-    balance.monthlyBalances.push({
-      periodKey,
-      creditedDays,
-      adjustedDays: 0,
-      pendingDays: 0,
-      usedDays: 0,
-      lapsedDays: 0,
-    });
+    /**
+     * The bucket may already exist because projected future entitlement
+     * was reserved before this month was actually accrued.
+     *
+     * In that case, convert the existing projected bucket into an accrued
+     * bucket without destroying its pending/used values.
+     */
+    if (existingMonthlyBalance) {
+      existingMonthlyBalance.creditedDays = creditedDays;
+      existingMonthlyBalance.isAccrued = true;
+    } else {
+      balance.monthlyBalances.push({
+        periodKey,
+        isAccrued: true,
+        creditedDays,
+        adjustedDays: 0,
+        pendingDays: 0,
+        usedDays: 0,
+        lapsedDays: 0,
+      });
+    }
 
     balance.accruedDays = roundToHalfDay(
       Number(balance.accruedDays || 0) + creditedDays,
     );
-
     balance.lastAccruedPeriodKey = periodKey;
 
     balance.updatedBy = requesterContext.userId ?? null;
@@ -904,6 +1844,331 @@ export const accrueMonthlyLeaveBalance = async ({
       await session.endSession();
     }
   }
+};
+
+/**
+ * ============================================================
+ * BULK MONTHLY ACCRUAL
+ * ============================================================
+ *
+ * Accrues all eligible ACTIVE monthly-accrual leave balances
+ * for one company and one requested month.
+ *
+ * This operation intentionally reuses accrueMonthlyLeaveBalance()
+ * so the single-balance and bulk flows follow exactly the same
+ * accrual rules.
+ *
+ * It is safe to run repeatedly:
+ * already-accrued monthly buckets are skipped by the underlying
+ * single-balance accrual operation.
+ */
+export const accrueBulkMonthlyLeaveBalances = async ({
+  companyId,
+  periodDate,
+  requesterContext,
+}) => {
+  /**
+   * Validate the requested period before deriving YYYY-MM.
+   *
+   * This matters because this service will later also be called
+   * directly by the scheduled job, not only through HTTP/Zod.
+   */
+  const parsedPeriodDate = new Date(periodDate);
+
+  if (Number.isNaN(parsedPeriodDate.getTime())) {
+    throw new ApiError(400, "Invalid monthly accrual period.");
+  }
+
+  const periodKey = getPeriodKey(parsedPeriodDate);
+
+  const periodStart = new Date(`${periodKey}-01T00:00:00.000Z`);
+
+  const periodEnd = new Date(
+    Date.UTC(
+      periodStart.getUTCFullYear(),
+      periodStart.getUTCMonth() + 1,
+      0,
+      23,
+      59,
+      59,
+      999,
+    ),
+  );
+
+  /**
+   * ============================================================
+   * 1. FIND LEAVE TYPES EFFECTIVE FOR THIS MONTH
+   * ============================================================
+   *
+   * A leave type is applicable when its effective date range
+   * overlaps the requested month.
+   *
+   * Example:
+   * effectiveFrom = 2026-09-23
+   *
+   * August    -> not applicable
+   * September -> applicable
+   */
+  const applicableLeaveTypes = await LeaveType.find({
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+    requiresBalance: true,
+    allocationMethod: "MONTHLY_ACCRUAL",
+
+    effectiveFrom: {
+      $lte: periodEnd,
+    },
+
+    $or: [
+      {
+        effectiveTo: null,
+      },
+      {
+        effectiveTo: {
+          $gte: periodStart,
+        },
+      },
+    ],
+  })
+    .select("_id")
+    .lean();
+
+  const applicableLeaveTypeIds = applicableLeaveTypes.map(
+    (leaveType) => leaveType._id,
+  );
+
+  /**
+   * No monthly leave type is applicable for this month.
+   *
+   * This is a valid no-op, not an error.
+   */
+  if (applicableLeaveTypeIds.length === 0) {
+    return {
+      periodKey,
+      processed: 0,
+      eligible: 0,
+      accrued: 0,
+      alreadyAccrued: 0,
+      skippedInactiveEmployee: 0,
+      skippedInactiveCompanyAccess: 0,
+      failed: 0,
+      failures: [],
+    };
+  }
+
+  /**
+   * ============================================================
+   * 2. FIND APPLICABLE MONTHLY BALANCES
+   * ============================================================
+   */
+  const baseFilter = {
+    companyId,
+    isDeleted: false,
+    status: "ACTIVE",
+    allocationMethod: "MONTHLY_ACCRUAL",
+
+    leaveTypeId: {
+      $in: applicableLeaveTypeIds,
+    },
+
+    /**
+     * The requested month must overlap the balance's leave year.
+     */
+    leaveYearStart: {
+      $lte: periodEnd,
+    },
+
+    leaveYearEnd: {
+      $gte: periodStart,
+    },
+  };
+
+  const BATCH_SIZE = 500;
+
+  let lastBalanceId = null;
+
+  let processed = 0;
+  let eligible = 0;
+  let accrued = 0;
+  let alreadyAccrued = 0;
+  let skippedInactiveEmployee = 0;
+  let skippedInactiveCompanyAccess = 0;
+  let failed = 0;
+
+  const failures = [];
+
+  while (true) {
+    const filter = {
+      ...baseFilter,
+    };
+
+    if (lastBalanceId) {
+      filter._id = {
+        $gt: lastBalanceId,
+      };
+    }
+
+    const balances = await LeaveBalance.find(filter)
+      .select("_id employeeId companyAccessId monthlyBalances")
+      .sort({
+        _id: 1,
+      })
+      .limit(BATCH_SIZE)
+      .lean();
+
+    if (balances.length === 0) {
+      break;
+    }
+
+    lastBalanceId = balances[balances.length - 1]._id;
+
+    /**
+     * Resolve active employees and company-access records once
+     * for the complete batch.
+     */
+    const employeeIds = [
+      ...new Set(
+        balances
+          .map((balance) => balance.employeeId?.toString())
+          .filter(Boolean),
+      ),
+    ];
+
+    const companyAccessIds = [
+      ...new Set(
+        balances
+          .map((balance) => balance.companyAccessId?.toString())
+          .filter(Boolean),
+      ),
+    ];
+
+    const [activeEmployees, activeCompanyAccessRecords] = await Promise.all([
+      Employee.find({
+        _id: {
+          $in: employeeIds,
+        },
+        companyId,
+        status: "ACTIVE",
+        isDeleted: false,
+      })
+        .select("_id")
+        .lean(),
+
+      CompanyAccess.find({
+        _id: {
+          $in: companyAccessIds,
+        },
+        companyId,
+        status: "ACTIVE",
+        isDeleted: false,
+      })
+        .select("_id")
+        .lean(),
+    ]);
+
+    const activeEmployeeIds = new Set(
+      activeEmployees.map((employee) => employee._id.toString()),
+    );
+
+    const activeCompanyAccessIds = new Set(
+      activeCompanyAccessRecords.map((access) => access._id.toString()),
+    );
+
+    for (const balance of balances) {
+      processed += 1;
+
+      /**
+       * Do not routinely credit inactive employees.
+       */
+      if (
+        !balance.employeeId ||
+        !activeEmployeeIds.has(balance.employeeId.toString())
+      ) {
+        skippedInactiveEmployee += 1;
+        continue;
+      }
+
+      /**
+       * Do not routinely credit inactive company access.
+       */
+      if (
+        !balance.companyAccessId ||
+        !activeCompanyAccessIds.has(balance.companyAccessId.toString())
+      ) {
+        skippedInactiveCompanyAccess += 1;
+        continue;
+      }
+
+      eligible += 1;
+
+      /**
+       * Fast idempotency check.
+       *
+       * accrueMonthlyLeaveBalance() performs the authoritative
+       * check again.
+       */
+      const existingMonthlyBalance = balance.monthlyBalances?.find(
+        (item) => item.periodKey === periodKey,
+      );
+
+      const isAlreadyAccrued =
+        existingMonthlyBalance &&
+        (existingMonthlyBalance.isAccrued === true ||
+          Number(existingMonthlyBalance.creditedDays || 0) > 0);
+
+      if (isAlreadyAccrued) {
+        alreadyAccrued += 1;
+        continue;
+      }
+
+      try {
+        /**
+         * Reuse the authoritative individual accrual operation.
+         */
+        const updatedBalance = await accrueMonthlyLeaveBalance({
+          companyId,
+          balanceId: balance._id,
+          periodDate: parsedPeriodDate,
+          requesterContext,
+        });
+
+        const updatedBucket = updatedBalance?.monthlyBalances?.find(
+          (item) => item.periodKey === periodKey,
+        );
+
+        const isAccruedNow =
+          updatedBucket &&
+          (updatedBucket.isAccrued === true ||
+            Number(updatedBucket.creditedDays || 0) > 0);
+
+        if (isAccruedNow) {
+          accrued += 1;
+        } else {
+          alreadyAccrued += 1;
+        }
+      } catch (error) {
+        failed += 1;
+
+        failures.push({
+          balanceId: balance._id.toString(),
+          message: error?.message ?? "Unknown monthly leave accrual error.",
+        });
+      }
+    }
+  }
+
+  return {
+    periodKey,
+    processed,
+    eligible,
+    accrued,
+    alreadyAccrued,
+    skippedInactiveEmployee,
+    skippedInactiveCompanyAccess,
+    failed,
+    failures,
+  };
 };
 
 /**
@@ -1055,6 +2320,66 @@ const calculateMonthlyBucketAvailableDays = (bucket) =>
   );
 
 /**
+ * Find an existing monthly bucket or create an empty bucket that can
+ * hold a reservation against a future monthly entitlement.
+ *
+ * Creating the bucket does NOT mean the month has been accrued.
+ */
+const findOrCreateMonthlyBucket = (balance, periodKey) => {
+  let bucket = balance.monthlyBalances.find(
+    (item) => item.periodKey === periodKey,
+  );
+
+  if (bucket) {
+    return bucket;
+  }
+
+  balance.monthlyBalances.push({
+    periodKey,
+    isAccrued: false,
+    creditedDays: 0,
+    adjustedDays: 0,
+    pendingDays: 0,
+    usedDays: 0,
+    lapsedDays: 0,
+  });
+
+  bucket = balance.monthlyBalances.find((item) => item.periodKey === periodKey);
+
+  return bucket;
+};
+
+/**
+ * Calculate usable capacity for a monthly bucket.
+ *
+ * Accrued bucket:
+ *   use the actual credited balance.
+ *
+ * Future non-accrued bucket:
+ *   use the configured monthly entitlement as projected capacity,
+ *   while subtracting anything already reserved/used against it.
+ */
+const calculateMonthlyBucketUsableDays = ({ bucket, leaveType }) => {
+  const isActuallyAccrued =
+    bucket.isAccrued === true || Number(bucket.creditedDays || 0) > 0;
+
+  if (isActuallyAccrued) {
+    return Math.max(0, calculateMonthlyBucketAvailableDays(bucket));
+  }
+
+  const projectedEntitlement = Number(leaveType.monthlyEntitlementDays || 0);
+
+  const projectedAvailable =
+    projectedEntitlement +
+    Number(bucket.adjustedDays || 0) -
+    Number(bucket.pendingDays || 0) -
+    Number(bucket.usedDays || 0) -
+    Number(bucket.lapsedDays || 0);
+
+  return Math.max(0, roundToHalfDay(projectedAvailable));
+};
+
+/**
  * ============================================================
  * INTERNAL BALANCE OPERATIONS
  * ============================================================
@@ -1121,32 +2446,77 @@ export const reserveLeaveBalance = async ({
       session,
     });
 
+    const currentPeriodKey = getPeriodKey(new Date());
+
     /**
-     * Validate every bucket first.
+     * Validate every allocation period first.
      *
-     * Do not mutate anything until the entire
-     * request is known to be valid.
+     * Future monthly buckets may not exist yet, so create an empty
+     * projected bucket when necessary. Creating the bucket does NOT
+     * mean that the entitlement has been accrued.
      */
     for (const allocation of allocations) {
-      const bucket = findMonthlyBucketOrFail(balance, allocation.periodKey);
-
+      const periodKey = allocation.periodKey;
       const allocationDays = Number(allocation.days);
 
-      const availableDays = calculateMonthlyBucketAvailableDays(bucket);
+      const periodStart = new Date(`${periodKey}-01T00:00:00.000Z`);
+
+      /**
+       * A projected monthly reservation must still belong to this
+       * balance's leave year.
+       */
+      if (
+        periodStart < new Date(balance.leaveYearStart) ||
+        periodStart > new Date(balance.leaveYearEnd)
+      ) {
+        throw new ApiError(
+          400,
+          `Leave balance allocation period ${periodKey} is outside this leave year.`,
+        );
+      }
+
+      let bucket = balance.monthlyBalances.find(
+        (item) => item.periodKey === periodKey,
+      );
+
+      if (!bucket) {
+        if (periodKey <= currentPeriodKey) {
+          throw new ApiError(
+            409,
+            `No accrued monthly leave entitlement is available for ${periodKey}.`,
+          );
+        }
+
+        bucket = findOrCreateMonthlyBucket(balance, periodKey);
+      }
+
+      const bucketIsAccrued =
+        bucket.isAccrued === true || Number(bucket.creditedDays || 0) > 0;
+
+      if (!bucketIsAccrued && periodKey <= currentPeriodKey) {
+        throw new ApiError(
+          409,
+          `Monthly leave entitlement for ${periodKey} has not been accrued.`,
+        );
+      }
+
+      const availableDays = calculateMonthlyBucketUsableDays({
+        bucket,
+        leaveType,
+      });
 
       if (availableDays < allocationDays) {
         throw new ApiError(
           409,
-          `Insufficient leave balance for ${allocation.periodKey}. Available: ${availableDays}, requested: ${allocationDays}.`,
+          `Insufficient leave balance for ${periodKey}. Available: ${availableDays}, requested: ${allocationDays}.`,
         );
       }
 
       /**
        * Monthly usage limit.
        *
-       * Pending reservations count toward the
-       * monthly limit so multiple simultaneous
-       * requests cannot bypass it.
+       * Both pending and already-approved usage count toward the
+       * monthly limit.
        */
       if (
         leaveType.maximumMonthlyUsageDays !== null &&
@@ -1163,14 +2533,20 @@ export const reserveLeaveBalance = async ({
         if (maximumUsage > 0 && projectedUsage > maximumUsage) {
           throw new ApiError(
             409,
-            `Monthly leave usage for ${allocation.periodKey} cannot exceed ${maximumUsage} day(s).`,
+            `Monthly leave usage for ${periodKey} cannot exceed ${maximumUsage} day(s).`,
           );
         }
       }
     }
 
+    /**
+     * All periods are valid.
+     *
+     * Reserve the paid allocation against each corresponding
+     * monthly bucket.
+     */
     for (const allocation of allocations) {
-      const bucket = findMonthlyBucketOrFail(balance, allocation.periodKey);
+      const bucket = findOrCreateMonthlyBucket(balance, allocation.periodKey);
 
       bucket.pendingDays = roundToHalfDay(
         Number(bucket.pendingDays || 0) + Number(allocation.days),

@@ -44,7 +44,7 @@ router.use(authenticate, enforceCompanyContext);
  */
 router.post(
   "/",
-  authorize(PERMISSIONS.LEAVE_TYPE_MANAGE),
+  authorize(PERMISSIONS.LEAVE_POLICY_MANAGE),
   validate(createLeavePolicySchema),
   createPolicy,
 );
@@ -56,7 +56,7 @@ router.post(
  */
 router.get(
   "/",
-  authorize(PERMISSIONS.LEAVE_TYPE_READ),
+  authorize(PERMISSIONS.LEAVE_POLICY_READ),
   validate(listLeavePoliciesSchema),
   listPolicies,
 );
@@ -68,7 +68,7 @@ router.get(
  */
 router.get(
   "/:policyId",
-  authorize(PERMISSIONS.LEAVE_TYPE_READ),
+  authorize(PERMISSIONS.LEAVE_POLICY_READ),
   validate(getLeavePolicySchema),
   getPolicy,
 );
@@ -80,7 +80,7 @@ router.get(
  */
 router.patch(
   "/:policyId",
-  authorize(PERMISSIONS.LEAVE_TYPE_MANAGE),
+  authorize(PERMISSIONS.LEAVE_POLICY_MANAGE),
   validate(updateLeavePolicySchema),
   updatePolicy,
 );

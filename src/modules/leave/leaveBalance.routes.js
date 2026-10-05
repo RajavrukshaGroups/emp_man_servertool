@@ -9,21 +9,27 @@ import { PERMISSIONS } from "../../constants/permissions.constants.js";
 
 import {
   initializeLeaveBalanceSchema,
+  initializeBulkLeaveBalancesSchema,
   listLeaveBalancesSchema,
+  getLeaveBalanceSummarySchema,
   getLeaveBalanceSchema,
   getEmployeeLeaveBalancesSchema,
   adjustLeaveBalanceSchema,
   accrueMonthlyLeaveBalanceSchema,
+  accrueBulkMonthlyLeaveBalancesSchema,
   closeLeaveBalanceSchema,
 } from "./leave.validation.js";
 
 import {
   initializeBalance,
+  initializeBulkBalances,
   listBalances,
+  getBalanceSummary,
   getBalance,
   getEmployeeBalances,
   adjustBalance,
   accrueBalance,
+  accrueBulkBalances,
   closeBalance,
 } from "./leaveBalance.controller.js";
 
@@ -57,6 +63,18 @@ router.get(
 
 /**
  * ============================================================
+ * GET LEAVE BALANCE SUMMARY
+ * ============================================================
+ */
+router.get(
+  "/summary",
+  authorize(PERMISSIONS.LEAVE_BALANCE_READ),
+  validate(getLeaveBalanceSummarySchema),
+  getBalanceSummary,
+);
+
+/**
+ * ============================================================
  * GET EMPLOYEE LEAVE BALANCES
  * ============================================================
  *
@@ -76,6 +94,12 @@ router.post(
   initializeBalance,
 );
 
+router.post(
+  "/initialize-bulk",
+  authorize(PERMISSIONS.LEAVE_BALANCE_MANAGE),
+  validate(initializeBulkLeaveBalancesSchema),
+  initializeBulkBalances,
+);
 /**
  * ============================================================
  * MANUAL BALANCE ADJUSTMENT
@@ -86,6 +110,21 @@ router.patch(
   authorize(PERMISSIONS.LEAVE_BALANCE_MANAGE),
   validate(adjustLeaveBalanceSchema),
   adjustBalance,
+);
+
+/**
+ * ============================================================
+ * BULK MONTHLY ACCRUAL
+ * ============================================================
+ *
+ * Credits the configured monthly entitlement to all eligible
+ * active monthly-accrual leave balances in the company.
+ */
+router.post(
+  "/accrue-bulk",
+  authorize(PERMISSIONS.LEAVE_BALANCE_MANAGE),
+  validate(accrueBulkMonthlyLeaveBalancesSchema),
+  accrueBulkBalances,
 );
 
 /**

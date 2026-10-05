@@ -72,8 +72,13 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.approve",
       "leave.reject",
       "leave.cancel",
+
+      "leave.policy_read",
+      "leave.policy_manage",
+
       "leave.type_read",
       "leave.type_manage",
+
       "leave.balance_read",
       "leave.balance_manage",
 
@@ -153,6 +158,9 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.read",
       "leave.recommend",
       "leave.cancel",
+
+      "leave.policy_read",
+
       "leave.type_read",
       "leave.balance_read",
 
@@ -208,6 +216,9 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.apply",
       "leave.read",
       "leave.cancel",
+
+      "leave.policy_read",
+
       "leave.type_read",
       "leave.balance_read",
 

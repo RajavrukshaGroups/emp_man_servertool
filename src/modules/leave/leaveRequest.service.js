@@ -474,79 +474,128 @@ const calculateUsablePaidAllocations = ({
     );
   }
 
-  let remainingAggregateAvailable = Math.max(
-    0,
-    calculateAvailableDays(leaveBalance),
-  );
-
   /**
-   * maximumConsecutiveDays limits how much of this request
-   * may be covered by the selected paid leave type.
+   * maximumConsecutiveDays limits how much of the complete
+   * request may be covered by the selected paid leave type.
    *
-   * The remaining requested days are allowed to continue
-   * as unpaid leave (LOP) instead of rejecting the request.
+   * This limit applies across month boundaries as well.
    */
-  if (Number(leaveType.maximumConsecutiveDays || 0) > 0) {
-    remainingAggregateAvailable = Math.min(
-      remainingAggregateAvailable,
-      Number(leaveType.maximumConsecutiveDays),
-    );
-  }
+  let remainingConsecutiveCapacity =
+    Number(leaveType.maximumConsecutiveDays || 0) > 0
+      ? Number(leaveType.maximumConsecutiveDays)
+      : Number.POSITIVE_INFINITY;
 
   const allocations = [];
 
-  for (const [periodKey, requestedDays] of requestedByPeriod.entries()) {
-    if (remainingAggregateAvailable <= 0) {
-      break;
-    }
+  /**
+   * ============================================================
+   * MONTHLY ACCRUAL
+   * ============================================================
+   *
+   * Monthly leave must NOT use the top-level aggregate
+   * available balance as the allocation ceiling.
+   *
+   * Each requested month owns its own entitlement.
+   *
+   * Existing accrued bucket:
+   *   use actual credited balance.
+   *
+   * Existing projected bucket:
+   *   use configured monthly entitlement minus commitments.
+   *
+   * Missing future bucket:
+   *   use configured monthly entitlement as projected capacity.
+   *
+   * The balance service will create/revalidate the projected
+   * bucket when the reservation is actually made.
+   */
+  if (leaveType.allocationMethod === "MONTHLY_ACCRUAL") {
+    const currentPeriodKey = getPeriodKey(new Date());
 
-    let usableDays = Math.min(requestedDays, remainingAggregateAvailable);
+    for (const [periodKey, requestedDays] of requestedByPeriod.entries()) {
+      if (remainingConsecutiveCapacity <= 0) {
+        break;
+      }
 
-    /**
-     * MONTHLY_ACCRUAL must additionally respect:
-     *
-     * - the month's credited/adjusted balance
-     * - already pending leave
-     * - already used leave
-     * - lapsed leave
-     * - maximum monthly usage
-     */
-    if (leaveType.allocationMethod === "MONTHLY_ACCRUAL") {
       const monthlyBalance = leaveBalance.monthlyBalances?.find(
         (item) => item.periodKey === periodKey,
       );
 
-      /**
-       * No credited bucket for the requested month means there
-       * is currently no usable paid entitlement for that month.
-       *
-       * Future/projected entitlement can be handled separately
-       * when we implement future-month accrual.
-       */
-      if (!monthlyBalance) {
-        continue;
-      }
+      let monthlyAvailable = 0;
+      let alreadyCommitted = 0;
 
-      const monthlyAvailable = Math.max(
-        0,
-        Number(
-          (
-            Number(monthlyBalance.creditedDays || 0) +
-            Number(monthlyBalance.adjustedDays || 0) -
-            Number(monthlyBalance.pendingDays || 0) -
-            Number(monthlyBalance.usedDays || 0) -
-            Number(monthlyBalance.lapsedDays || 0)
-          ).toFixed(2),
-        ),
-      );
-
-      usableDays = Math.min(usableDays, monthlyAvailable);
-
-      if (leaveType.maximumMonthlyUsageDays != null) {
-        const alreadyCommitted =
+      if (monthlyBalance) {
+        alreadyCommitted =
           Number(monthlyBalance.usedDays || 0) +
           Number(monthlyBalance.pendingDays || 0);
 
+        const monthlyBucketIsAccrued =
+          monthlyBalance.isAccrued === true ||
+          Number(monthlyBalance.creditedDays || 0) > 0;
+
+        if (monthlyBucketIsAccrued) {
+          monthlyAvailable = Math.max(
+            0,
+            Number(
+              (
+                Number(monthlyBalance.creditedDays || 0) +
+                Number(monthlyBalance.adjustedDays || 0) -
+                Number(monthlyBalance.pendingDays || 0) -
+                Number(monthlyBalance.usedDays || 0) -
+                Number(monthlyBalance.lapsedDays || 0)
+              ).toFixed(2),
+            ),
+          );
+        } else {
+          /**
+           * A non-accrued bucket represents projected entitlement.
+           *
+           * Projected entitlement may be used only for a future month.
+           * Current/past months require actual accrual.
+           */
+          if (periodKey <= currentPeriodKey) {
+            continue;
+          }
+
+          monthlyAvailable = Math.max(
+            0,
+            Number(
+              (
+                Number(leaveType.monthlyEntitlementDays || 0) +
+                Number(monthlyBalance.adjustedDays || 0) -
+                Number(monthlyBalance.pendingDays || 0) -
+                Number(monthlyBalance.usedDays || 0) -
+                Number(monthlyBalance.lapsedDays || 0)
+              ).toFixed(2),
+            ),
+          );
+        }
+      } else {
+        /**
+         * Missing buckets may be projected only for a future month.
+         *
+         * Current/past months still require actual accrual.
+         */
+        if (periodKey <= currentPeriodKey) {
+          continue;
+        }
+
+        monthlyAvailable = Math.max(
+          0,
+          Number(Number(leaveType.monthlyEntitlementDays || 0).toFixed(2)),
+        );
+      }
+
+      let usableDays = Math.min(
+        Number(requestedDays),
+        monthlyAvailable,
+        remainingConsecutiveCapacity,
+      );
+
+      /**
+       * Respect maximum usage allowed within this month.
+       */
+      if (leaveType.maximumMonthlyUsageDays != null) {
         const remainingMonthlyUsage = Math.max(
           0,
           Number(leaveType.maximumMonthlyUsageDays) - alreadyCommitted,
@@ -554,9 +603,58 @@ const calculateUsablePaidAllocations = ({
 
         usableDays = Math.min(usableDays, remainingMonthlyUsage);
       }
+
+      usableDays = Number(Math.max(0, usableDays).toFixed(2));
+
+      if (usableDays <= 0) {
+        continue;
+      }
+
+      allocations.push({
+        periodKey,
+        days: usableDays,
+      });
+
+      remainingConsecutiveCapacity = Number(
+        Math.max(0, remainingConsecutiveCapacity - usableDays).toFixed(2),
+      );
     }
 
-    usableDays = Number(Math.max(0, usableDays).toFixed(2));
+    return allocations;
+  }
+
+  /**
+   * ============================================================
+   * ANNUAL UPFRONT / MANUAL
+   * ============================================================
+   *
+   * These allocation methods continue using the actual aggregate
+   * balance because they do not have independent monthly
+   * entitlement buckets.
+   */
+  let remainingAggregateAvailable = Math.max(
+    0,
+    calculateAvailableDays(leaveBalance),
+  );
+
+  if (Number.isFinite(remainingConsecutiveCapacity)) {
+    remainingAggregateAvailable = Math.min(
+      remainingAggregateAvailable,
+      remainingConsecutiveCapacity,
+    );
+  }
+
+  for (const [periodKey, requestedDays] of requestedByPeriod.entries()) {
+    if (remainingAggregateAvailable <= 0) {
+      break;
+    }
+
+    const usableDays = Number(
+      Math.max(
+        0,
+        Math.min(Number(requestedDays), remainingAggregateAvailable),
+      ).toFixed(2),
+    );
 
     if (usableDays <= 0) {
       continue;
@@ -906,6 +1004,50 @@ const validateNoOverlappingLeave = async ({
 
 /**
  * ============================================================
+ * FIND APPLICABLE LEAVE BALANCE FOR PREVIEW
+ * ============================================================
+ *
+ * Preview must be read-only.
+ *
+ * Unlike createLeaveRequest(), this helper must NOT initialize
+ * or mutate a leave balance. It only returns an already existing
+ * balance for the applicable leave year.
+ */
+const findApplicableLeaveBalanceForPreview = async ({
+  companyId,
+  companyAccessId,
+  leaveType,
+  leavePolicy,
+  requestDate,
+  session,
+}) => {
+  const date = normalizeDateOnly(requestDate);
+
+  const { leaveYearStart, leaveYearEnd } = resolveLeaveYear({
+    requestDate: date,
+    leavePolicy,
+  });
+
+  return LeaveBalance.findOne({
+    companyId,
+    companyAccessId,
+    leaveTypeId: leaveType._id,
+
+    status: "ACTIVE",
+    isDeleted: false,
+
+    leaveYearStart: {
+      $lte: date,
+    },
+
+    leaveYearEnd: {
+      $gte: date,
+    },
+  }).session(session);
+};
+
+/**
+ * ============================================================
  * FIND ACTIVE BALANCE
  * ============================================================
  */
@@ -1046,6 +1188,285 @@ const validateRequestWithinSingleLeaveYear = ({
       400,
       "A leave request cannot span multiple leave years. Please submit separate leave requests for each leave year.",
     );
+  }
+};
+
+/**
+ * ============================================================
+ * PREVIEW LEAVE REQUEST
+ * ============================================================
+ *
+ * Read-only calculation used by the employee Apply Leave page.
+ *
+ * IMPORTANT:
+ * - does NOT create a leave request
+ * - does NOT reserve leave balance
+ * - does NOT consume leave balance
+ * - does NOT create a missing leave balance
+ *
+ * The actual create operation remains authoritative and
+ * revalidates everything again at submission time.
+ */
+export const previewLeaveRequest = async ({
+  companyId,
+  data,
+  requesterContext,
+}) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const fromDate = normalizeDateOnly(data.fromDate);
+    const toDate = normalizeDateOnly(data.toDate);
+
+    const { employee, companyAccess } = await resolveRequesterEmployeeContext({
+      companyId,
+      requesterContext,
+      session,
+    });
+
+    const [leaveType, leavePolicy] = await Promise.all([
+      findApplicableLeaveType({
+        companyId,
+        leaveTypeId: data.leaveTypeId,
+        fromDate,
+        session,
+      }),
+
+      findApplicableLeavePolicy({
+        companyId,
+        fromDate,
+        session,
+      }),
+    ]);
+
+    /**
+     * The complete request must remain inside the effective
+     * period of both the selected leave type and policy.
+     */
+    if (
+      leaveType.effectiveTo &&
+      normalizeDateOnly(leaveType.effectiveTo) < toDate
+    ) {
+      throw new ApiError(
+        400,
+        "The leave request extends beyond the leave type effective period.",
+      );
+    }
+
+    if (
+      leavePolicy.effectiveTo &&
+      normalizeDateOnly(leavePolicy.effectiveTo) < toDate
+    ) {
+      throw new ApiError(
+        400,
+        "The leave request extends beyond the leave policy effective period.",
+      );
+    }
+
+    validateRequestWithinSingleLeaveYear({
+      fromDate,
+      toDate,
+      leavePolicy,
+    });
+
+    let dateDetails = buildLeaveDateDetails({
+      fromDate,
+      toDate,
+
+      startDayPortion: data.startDayPortion ?? "FULL_DAY",
+
+      endDayPortion: data.endDayPortion ?? "FULL_DAY",
+    });
+
+    const requestedDays = calculateRequestedDays(dateDetails);
+
+    if (requestedDays <= 0) {
+      throw new ApiError(
+        400,
+        "The leave request does not contain any countable leave days.",
+      );
+    }
+
+    validateLeaveRequestRules({
+      leaveType,
+      leavePolicy,
+      companyAccess,
+      fromDate,
+      requestedDays,
+      attachmentUrl: data.attachmentUrl,
+    });
+
+    /**
+     * Preview should respect the same overlap rule as actual
+     * request creation.
+     */
+    if (leavePolicy.preventOverlappingRequests === true) {
+      await validateNoOverlappingLeave({
+        companyId,
+        companyAccessId: companyAccess._id,
+        fromDate,
+        toDate,
+        session,
+      });
+    }
+
+    let leaveBalance = null;
+    let balanceAllocations = [];
+
+    let paidDays = 0;
+    let unpaidDays = 0;
+
+    let unpaidLeaveType = null;
+
+    /**
+     * ============================================================
+     * CALCULATE PAID / UNPAID PREVIEW
+     * ============================================================
+     */
+    if (leaveType.paymentType === "UNPAID") {
+      paidDays = 0;
+      unpaidDays = requestedDays;
+
+      unpaidLeaveType = leaveType;
+    } else {
+      if (
+        leaveType.requiresBalance === true &&
+        leaveType.allocationMethod !== "NO_BALANCE"
+      ) {
+        leaveBalance = await findApplicableLeaveBalanceForPreview({
+          companyId,
+
+          companyAccessId: companyAccess._id,
+
+          leaveType,
+
+          leavePolicy,
+
+          requestDate: fromDate,
+
+          session,
+        });
+
+        /**
+         * If no persisted balance exists, preview must not create one.
+         *
+         * When auto-create is enabled we can safely construct an
+         * in-memory empty balance shape. This lets the existing
+         * allocation calculator project future MONTHLY_ACCRUAL
+         * entitlement without writing anything to MongoDB.
+         *
+         * Annual/manual allocation still remains zero until an actual
+         * balance exists because there is no persisted allocation to use.
+         */
+        if (!leaveBalance && leavePolicy.autoCreateLeaveBalances === true) {
+          leaveBalance = {
+            allocatedDays: 0,
+            accruedDays: 0,
+            carriedForwardDays: 0,
+            adjustedDays: 0,
+            pendingDays: 0,
+            usedDays: 0,
+            lapsedDays: 0,
+            monthlyBalances: [],
+          };
+        }
+
+        /**
+         * Match create behaviour when automatic balance creation is
+         * disabled.
+         */
+        if (!leaveBalance && leavePolicy.autoCreateLeaveBalances !== true) {
+          throw new ApiError(
+            409,
+            "No active leave balance is available for this leave type and leave year.",
+          );
+        }
+
+        balanceAllocations = calculateUsablePaidAllocations({
+          leaveType,
+          leaveBalance,
+          dateDetails,
+        });
+
+        paidDays = Number(
+          balanceAllocations
+            .reduce(
+              (total, allocation) => total + Number(allocation.days || 0),
+              0,
+            )
+            .toFixed(2),
+        );
+      } else {
+        /**
+         * Paid leave without balance requirement is fully paid.
+         */
+        paidDays = requestedDays;
+      }
+
+      unpaidDays = Number(Math.max(0, requestedDays - paidDays).toFixed(2));
+
+      if (unpaidDays > 0) {
+        unpaidLeaveType = await findApplicableUnpaidLeaveType({
+          companyId,
+          fromDate,
+          toDate,
+          session,
+        });
+
+        if (!unpaidLeaveType) {
+          throw new ApiError(
+            409,
+            "The selected paid leave entitlement cannot cover the full request, and no active unpaid leave type is configured for the remaining days.",
+          );
+        }
+      }
+    }
+
+    /**
+     * Reuse the same per-date allocation logic as create.
+     */
+    dateDetails = applyPaidUnpaidAllocationToDates({
+      dateDetails,
+      balanceAllocations,
+      selectedLeaveType: leaveType,
+      unpaidLeaveType,
+    });
+
+    return {
+      leaveType: {
+        id: leaveType._id,
+        name: leaveType.name,
+        code: leaveType.code,
+        paymentType: leaveType.paymentType,
+        allocationMethod: leaveType.allocationMethod,
+      },
+
+      unpaidLeaveType: unpaidLeaveType
+        ? {
+            id: unpaidLeaveType._id,
+            name: unpaidLeaveType.name,
+            code: unpaidLeaveType.code,
+          }
+        : null,
+
+      fromDate,
+      toDate,
+
+      startDayPortion: data.startDayPortion ?? "FULL_DAY",
+      endDayPortion: data.endDayPortion ?? "FULL_DAY",
+
+      requestedDays,
+      paidDays,
+      unpaidDays,
+
+      payrollAdjustmentRequired: unpaidDays > 0,
+
+      balanceAllocations,
+
+      dateDetails,
+    };
+  } finally {
+    await session.endSession();
   }
 };
 

@@ -36,6 +36,11 @@ const monthlyBalanceSchema = new mongoose.Schema(
       ],
     },
 
+    isAccrued: {
+      type: Boolean,
+      default: false,
+    },
+
     creditedDays: {
       type: Number,
       default: 0,

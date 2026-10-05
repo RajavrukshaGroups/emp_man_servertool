@@ -21,6 +21,7 @@ import {
 } from "./leave.validation.js";
 
 import {
+  previewLeave,
   createLeave,
   listLeaves,
   getLeave,
@@ -48,6 +49,25 @@ const router = express.Router({
  */
 
 router.use(authenticate, enforceCompanyContext);
+
+/**
+ * ============================================================
+ * PREVIEW OWN LEAVE REQUEST
+ * ============================================================
+ *
+ * POST /companies/:companyId/leave/requests/preview
+ *
+ * Read-only calculation.
+ * Does not create a request or reserve leave entitlement.
+ *
+ * Uses the same input validation as actual leave submission.
+ */
+router.post(
+  "/preview",
+  authorize(PERMISSIONS.LEAVE_APPLY),
+  validate(createLeaveRequestSchema),
+  previewLeave,
+);  
 
 /**
  * ============================================================

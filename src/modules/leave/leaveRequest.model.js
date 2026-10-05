@@ -788,17 +788,100 @@ leaveRequestSchema.pre("validate", function () {
     );
   }
 
+  const EPSILON = 0.001;
+
   const calculatedRequestedDays = this.dateDetails.reduce(
-    (total, detail) => total + Number(detail.leaveDays || 0),
+    (total, detail) =>
+      total + (detail.countedAsLeave ? Number(detail.leaveDays || 0) : 0),
     0,
   );
 
   if (
     this.dateDetails.length > 0 &&
-    Math.abs(calculatedRequestedDays - Number(this.requestedDays)) > 0.001
+    Math.abs(calculatedRequestedDays - Number(this.requestedDays || 0)) >
+      EPSILON
   ) {
     throw new Error(
-      "Requested leave days must match the calculated date details.",
+      "Requested leave days must match the calculated counted leave dates.",
+    );
+  }
+
+  let calculatedPaidDays = 0;
+  let calculatedUnpaidDays = 0;
+
+  for (const detail of this.dateDetails) {
+    const leaveDays = Number(detail.leaveDays || 0);
+    const paidDays = Number(detail.paidDays || 0);
+    const unpaidDays = Number(detail.unpaidDays || 0);
+
+    /**
+     * Dates excluded from leave calculation, such as a weekly off or
+     * public holiday, must not carry any financial allocation.
+     */
+    if (!detail.countedAsLeave) {
+      if (
+        leaveDays !== 0 ||
+        paidDays !== 0 ||
+        unpaidDays !== 0 ||
+        detail.allocationType !== "NOT_APPLICABLE"
+      ) {
+        throw new Error(
+          "Non-counted leave dates must have zero leave allocation and use NOT_APPLICABLE allocation type.",
+        );
+      }
+
+      continue;
+    }
+
+    /**
+     * Every counted leave date must be fully allocated between
+     * paid leave and unpaid / LOP.
+     */
+    if (Math.abs(paidDays + unpaidDays - leaveDays) > EPSILON) {
+      throw new Error(
+        "Paid and unpaid allocation for each leave date must equal its leave days.",
+      );
+    }
+
+    /**
+     * Validate allocationType against the actual financial split.
+     */
+    if (detail.allocationType === "PAID") {
+      if (paidDays <= 0 || unpaidDays !== 0) {
+        throw new Error("PAID leave dates must contain paid days only.");
+      }
+    } else if (detail.allocationType === "UNPAID") {
+      if (paidDays !== 0 || unpaidDays <= 0) {
+        throw new Error("UNPAID leave dates must contain unpaid days only.");
+      }
+    } else if (detail.allocationType === "MIXED") {
+      if (paidDays <= 0 || unpaidDays <= 0) {
+        throw new Error(
+          "MIXED leave dates must contain both paid and unpaid days.",
+        );
+      }
+    } else {
+      throw new Error(
+        "Counted leave dates cannot use NOT_APPLICABLE allocation type.",
+      );
+    }
+
+    calculatedPaidDays += paidDays;
+    calculatedUnpaidDays += unpaidDays;
+  }
+
+  calculatedPaidDays = Number(calculatedPaidDays.toFixed(2));
+  calculatedUnpaidDays = Number(calculatedUnpaidDays.toFixed(2));
+
+  if (Math.abs(calculatedPaidDays - Number(this.paidDays || 0)) > EPSILON) {
+    throw new Error(
+      "Request paid days must match the total paid allocation in date details.",
+    );
+  }
+
+  if (Math.abs(calculatedUnpaidDays - Number(this.unpaidDays || 0)) > EPSILON) {
+    throw new Error(
+      "Request unpaid days must match the total unpaid allocation in date details.",
     );
   }
 
@@ -808,7 +891,7 @@ leaveRequestSchema.pre("validate", function () {
 
   if (
     Number(this.requestedDays || 0) > 0 &&
-    Math.abs(totalAllocatedDays - Number(this.requestedDays)) > 0.001
+    Math.abs(totalAllocatedDays - Number(this.requestedDays || 0)) > EPSILON
   ) {
     throw new Error(
       "Paid and unpaid leave days must equal the total requested leave days.",
@@ -816,7 +899,6 @@ leaveRequestSchema.pre("validate", function () {
   }
 
   this.payrollAdjustmentRequired = Number(this.unpaidDays || 0) > 0;
-
   if (this.status === "RECOMMENDED" && !this.recommendedAt) {
     throw new Error(
       "Recommended leave requests must contain recommendation details.",

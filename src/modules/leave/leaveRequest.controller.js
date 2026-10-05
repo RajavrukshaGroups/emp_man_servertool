@@ -5,6 +5,7 @@ import {
   createLeaveRequest,
   getLeaveRequestById,
   listLeaveRequests,
+  previewLeaveRequest,
   recommendLeaveRequest,
   rejectLeaveCancellation as rejectLeaveCancellationService,
   rejectLeaveRequest,
@@ -13,6 +14,38 @@ import {
 
 import { getLeaveRequesterContext } from "./leave.scope.js";
 
+/**
+ * ============================================================
+ * PREVIEW LEAVE REQUEST
+ * ============================================================
+ *
+ * POST /companies/:companyId/leave/requests/preview
+ *
+ * Read-only preview of how the selected leave dates will be
+ * allocated between paid leave and unpaid leave.
+ */
+export const previewLeave = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const requesterContext = getLeaveRequesterContext(req);
+
+    const data = await previewLeaveRequest({
+      companyId,
+      data: req.validated.body,
+      requesterContext,
+    });
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Leave request preview calculated successfully.",
+      data,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
 /**
  * ============================================================
  * CREATE LEAVE REQUEST

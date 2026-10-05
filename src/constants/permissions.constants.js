@@ -82,8 +82,13 @@ export const PERMISSIONS = Object.freeze({
   LEAVE_APPROVE: "leave.approve",
   LEAVE_REJECT: "leave.reject",
   LEAVE_CANCEL: "leave.cancel",
+
+  LEAVE_POLICY_READ: "leave.policy_read",
+  LEAVE_POLICY_MANAGE: "leave.policy_manage",
+
   LEAVE_TYPE_READ: "leave.type_read",
   LEAVE_TYPE_MANAGE: "leave.type_manage",
+
   LEAVE_BALANCE_READ: "leave.balance_read",
   LEAVE_BALANCE_MANAGE: "leave.balance_manage",
 

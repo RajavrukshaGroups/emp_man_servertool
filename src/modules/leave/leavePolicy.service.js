@@ -165,10 +165,18 @@ export const createLeavePolicy = async ({
         session,
       });
 
+      const existingPolicyCount = await LeavePolicy.countDocuments({
+        companyId,
+        isDeleted: false,
+      }).session(session);
+
+      const shouldBeDefault =
+        data.isDefault === true || existingPolicyCount === 0;
+
       /**
        * Only one default leave policy should exist per company.
        */
-      if (data.isDefault === true) {
+      if (shouldBeDefault) {
         await LeavePolicy.updateMany(
           {
             companyId,
@@ -191,6 +199,8 @@ export const createLeavePolicy = async ({
             companyId,
 
             ...data,
+
+            isDefault: shouldBeDefault,
 
             createdBy: requesterContext.userId ?? null,
             updatedBy: requesterContext.userId ?? null,
@@ -354,6 +364,13 @@ export const updateLeavePolicy = async ({
       const existingPolicy = await findLeavePolicyOrFail(companyId, policyId, {
         session,
       });
+
+      if (existingPolicy.isDefault === true && data.isDefault === false) {
+        throw new ApiError(
+          400,
+          "The default leave policy cannot be unset directly. Set another leave policy as default instead.",
+        );
+      }
 
       /**
        * PATCH validation must consider both the existing policy

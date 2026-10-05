@@ -15,8 +15,7 @@ const optionalText = (maximumLength, fieldName = "Text") =>
     .optional()
     .or(z.literal(""));
 
-const optionalNullableDate = z.union([z.coerce.date(), z.null()]).optional();
-
+const optionalNullableDate = z.union([z.null(), z.coerce.date()]).optional();
 const statusSchema = z.enum(["ACTIVE", "INACTIVE"]);
 
 const halfDayNumberSchema = z.coerce
@@ -166,7 +165,7 @@ const leavePolicyFields = {
 
   effectiveFrom: z.coerce.date(),
 
-  effectiveTo: z.union([z.coerce.date(), z.null()]).default(null),
+  effectiveTo: z.union([z.null(), z.coerce.date()]).default(null),
 
   isDefault: z.boolean().default(false),
 
@@ -199,6 +198,54 @@ export const initializeLeaveBalanceSchema = z.object({
         path: ["leaveYearEnd"],
       },
     ),
+
+  params: companyParamsSchema,
+
+  query: z.object({}).strict().optional(),
+});
+
+/**
+ * ============================================================
+ * BULK INITIALIZE LEAVE BALANCES
+ * ============================================================
+ *
+ * employeeIds:
+ * - omitted / [] -> initialize all eligible active employees
+ * - supplied     -> initialize only those eligible employees
+ *
+ * Leave types are resolved by the backend.
+ */
+export const initializeBulkLeaveBalancesSchema = z.object({
+  body: z
+    .object({
+      leavePolicyId: objectIdSchema,
+
+      leaveYearStart: z.coerce.date(),
+      leaveYearEnd: z.coerce.date(),
+
+      leaveYearLabel: z
+        .string()
+        .trim()
+        .min(1, "Leave year label is required.")
+        .max(20, "Leave year label cannot exceed 20 characters."),
+
+      employeeIds: z
+        .array(objectIdSchema)
+        .max(10000, "Too many employees selected for bulk initialization.")
+        .default([]),
+    })
+    .strict()
+    .refine(
+      (body) => body.leaveYearEnd.getTime() >= body.leaveYearStart.getTime(),
+      {
+        message: "Leave year end cannot be before leave year start.",
+        path: ["leaveYearEnd"],
+      },
+    )
+    .transform((body) => ({
+      ...body,
+      employeeIds: [...new Set(body.employeeIds)],
+    })),
 
   params: companyParamsSchema,
 
@@ -246,9 +293,19 @@ export const updateLeavePolicySchema = z.object({
       preventOverlappingRequests: z.boolean().optional(),
       preventAttendanceConflict: z.boolean().optional(),
 
-      maximumFutureApplicationDays:
-        leavePolicyFields.maximumFutureApplicationDays.optional(),
-
+      maximumFutureApplicationDays: z
+        .union([
+          z.coerce
+            .number()
+            .int("Maximum future application days must be a whole number.")
+            .min(0, "Maximum future application days cannot be negative.")
+            .max(
+              1095,
+              "Maximum future application days cannot exceed 1095 days.",
+            ),
+          z.null(),
+        ])
+        .optional(),
       requireReason: z.boolean().optional(),
       autoCreateLeaveBalances: z.boolean().optional(),
       reserveBalanceOnSubmission: z.boolean().optional(),
@@ -395,8 +452,7 @@ const leaveTypeFields = {
 
   effectiveFrom: z.coerce.date(),
 
-  effectiveTo: z.union([z.coerce.date(), z.null()]).default(null),
-
+  effectiveTo: z.union([z.null(), z.coerce.date()]).default(null),
   status: statusSchema.default("ACTIVE"),
 };
 
@@ -630,6 +686,49 @@ export const listLeaveBalancesSchema = z.object({
 });
 
 /**
+ * ============================================================
+ * GET LEAVE BALANCE SUMMARY
+ * ============================================================
+ *
+ * Returns aggregate balance totals for all balances visible
+ * to the authenticated user within the supplied filters.
+ *
+ * Scope enforcement belongs in the service layer.
+ */
+export const getLeaveBalanceSummarySchema = z.object({
+  body: z.object({}).strict().optional(),
+
+  params: companyParamsSchema,
+
+  query: z
+    .object({
+      employeeId: objectIdSchema.optional(),
+      companyAccessId: objectIdSchema.optional(),
+
+      leaveTypeId: objectIdSchema.optional(),
+      leavePolicyId: objectIdSchema.optional(),
+
+      allocationMethod: allocationMethodSchema.optional(),
+
+      status: leaveBalanceStatusSchema.optional(),
+
+      leaveYearStart: z.coerce.date().optional(),
+      leaveYearEnd: z.coerce.date().optional(),
+    })
+    .strict()
+    .refine(
+      (query) =>
+        !query.leaveYearStart ||
+        !query.leaveYearEnd ||
+        query.leaveYearEnd.getTime() >= query.leaveYearStart.getTime(),
+      {
+        message: "Leave year end cannot be before leave year start.",
+        path: ["leaveYearEnd"],
+      },
+    ),
+});
+
+/**
  * Get one leave balance.
  */
 export const getLeaveBalanceSchema = z.object({
@@ -747,6 +846,26 @@ export const accrueMonthlyLeaveBalanceSchema = z.object({
     .strict(),
 
   params: leaveBalanceParamsSchema,
+
+  query: z.object({}).strict().optional(),
+});
+
+/**
+ * ============================================================
+ * BULK MONTHLY LEAVE ACCRUAL
+ * ============================================================
+ *
+ * Accrues monthly entitlement for all eligible active
+ * monthly-accrual balances within the selected company.
+ */
+export const accrueBulkMonthlyLeaveBalancesSchema = z.object({
+  body: z
+    .object({
+      periodDate: z.coerce.date(),
+    })
+    .strict(),
+
+  params: companyParamsSchema,
 
   query: z.object({}).strict().optional(),
 });

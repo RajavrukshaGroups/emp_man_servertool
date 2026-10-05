@@ -1,13 +1,15 @@
 import {
   createLeaveBalance,
+  initializeBulkLeaveBalances,
   listLeaveBalances,
+  getLeaveBalanceSummary,
   getLeaveBalanceById,
   getEmployeeLeaveBalances,
   adjustLeaveBalance,
   accrueMonthlyLeaveBalance,
+  accrueBulkMonthlyLeaveBalances,
   closeLeaveBalance,
 } from "./leaveBalance.service.js";
-
 import {
   getLeaveRequesterContext,
   getReadableLeaveCompanyAccessIds,
@@ -41,6 +43,50 @@ export const initializeBalance = async (req, res) => {
     message: "Leave balance initialized successfully.",
     data: balance,
   });
+};
+
+/**
+ * ============================================================
+ * BULK INITIALIZE LEAVE BALANCES
+ * ============================================================
+ */
+export const initializeBulkBalances = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const {
+      leavePolicyId,
+      leaveYearStart,
+      leaveYearEnd,
+      leaveYearLabel,
+      employeeIds = [],
+    } = req.validated.body;
+
+    const requesterContext = await getLeaveRequesterContext(req);
+
+    const data = await initializeBulkLeaveBalances({
+      companyId,
+
+      leavePolicyId,
+
+      leaveYearStart,
+      leaveYearEnd,
+      leaveYearLabel,
+
+      employeeIds,
+
+      requesterContext,
+    });
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Leave balances bulk initialization completed successfully.",
+      data,
+    });
+  } catch (error) {
+    return next(error);
+  }
 };
 
 /**
@@ -90,6 +136,64 @@ export const listBalances = async (req, res, next) => {
       success: true,
       statusCode: 200,
       message: "Leave balances fetched successfully.",
+      data,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * ============================================================
+ * GET LEAVE BALANCE SUMMARY
+ * ============================================================
+ */
+export const getBalanceSummary = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const requesterContext = getLeaveRequesterContext(req);
+
+    let scopeFilter = {};
+
+    /**
+     * Keep summary visibility exactly aligned with
+     * the leave balance list.
+     *
+     * GLOBAL / COMPANY:
+     *   all balances inside the selected company.
+     *
+     * Other scopes:
+     *   only balances belonging to readable
+     *   CompanyAccess records.
+     */
+    if (
+      requesterContext.accessType !== "GLOBAL" &&
+      requesterContext.roleScopeType !== "GLOBAL" &&
+      requesterContext.roleScopeType !== "COMPANY"
+    ) {
+      const readableCompanyAccessIds = await getReadableLeaveCompanyAccessIds({
+        companyId,
+        requesterContext,
+      });
+
+      scopeFilter = {
+        companyAccessId: {
+          $in: readableCompanyAccessIds,
+        },
+      };
+    }
+
+    const data = await getLeaveBalanceSummary({
+      companyId,
+      query: req.validated.query,
+      scopeFilter,
+    });
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Leave balance summary fetched successfully.",
       data,
     });
   } catch (error) {
@@ -238,6 +342,34 @@ export const accrueBalance = async (req, res, next) => {
       success: true,
       statusCode: 200,
       message: "Monthly leave balance accrued successfully.",
+      data,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * ============================================================
+ * BULK MONTHLY ACCRUAL
+ * ============================================================
+ */
+export const accrueBulkBalances = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const requesterContext = getLeaveRequesterContext(req);
+
+    const data = await accrueBulkMonthlyLeaveBalances({
+      companyId,
+      periodDate: req.validated.body.periodDate,
+      requesterContext,
+    });
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Bulk monthly leave accrual completed successfully.",
       data,
     });
   } catch (error) {
