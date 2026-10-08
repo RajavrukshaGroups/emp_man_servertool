@@ -66,7 +66,6 @@ const DEFAULT_COMPANY_ROLES = [
       "task.reopen",
       "task.cancel",
 
-      "leave.apply",
       "leave.read",
       "leave.recommend",
       "leave.approve",
@@ -81,6 +80,9 @@ const DEFAULT_COMPANY_ROLES = [
 
       "leave.balance_read",
       "leave.balance_manage",
+
+      "calendar.read",
+      "calendar.manage",
 
       "attendance.check_in",
       "attendance.check_out",
@@ -164,6 +166,8 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.type_read",
       "leave.balance_read",
 
+      "calendar.read",
+
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",
@@ -222,6 +226,7 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.type_read",
       "leave.balance_read",
 
+      "calendar.read",
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",

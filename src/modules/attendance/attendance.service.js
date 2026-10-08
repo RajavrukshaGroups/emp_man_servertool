@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 import { ApiError } from "../../utils/ApiError.js";
+import { resolveWorkDay } from "../workCalendar/workCalendar.service.js";
 
 import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
@@ -12,6 +13,8 @@ import AttendancePolicy from "./attendancePolicy.model.js";
 
 import Shift from "./shift.model.js";
 import FieldVisit from "./fieldVisit.model.js";
+
+import LeaveRequest from "../leave/leaveRequest.model.js";
 
 import {
   calculateAttendanceTotals,
@@ -1267,6 +1270,57 @@ const buildAttendanceListQuery = ({ baseFilter, query = {} }) => {
 
 /**
  * ============================================================
+ * APPROVED LEAVE FOR ATTENDANCE DATE
+ * ============================================================
+ *
+ * Returns approved leave requests that actually count as leave
+ * for the requested attendance date.
+ *
+ * IMPORTANT:
+ * We intentionally check dateDetails.countedAsLeave instead of
+ * only checking fromDate/toDate because weekly offs and holidays
+ * inside a leave range must not become ON_LEAVE.
+ */
+const findApprovedLeavesForAttendanceDate = async ({
+  companyId,
+  companyAccessIds = [],
+  date,
+  session = null,
+}) => {
+  if (!companyAccessIds.length) {
+    return [];
+  }
+
+  let query = LeaveRequest.find({
+    companyId,
+
+    companyAccessId: {
+      $in: companyAccessIds,
+    },
+
+    status: "APPROVED",
+
+    isDeleted: false,
+
+    dateDetails: {
+      $elemMatch: {
+        date,
+        countedAsLeave: true,
+      },
+    },
+  }).select(
+    "_id companyAccessId leaveTypeId fromDate toDate totalDays paidDays unpaidDays status dateDetails",
+  );
+
+  if (session) {
+    query = query.session(session);
+  }
+
+  return query.lean();
+};
+
+/**
+ * ============================================================
  * DAILY ATTENDANCE SUMMARY
  * ============================================================
  *
@@ -1295,6 +1349,11 @@ export const getDailyAttendanceSummary = async ({
 
   const { date, departmentId, teamId, shiftId, attendanceStatus, search } =
     query;
+
+  const workDay = await resolveWorkDay({
+    companyId,
+    date,
+  });
 
   /**
    * ========================================================
@@ -1453,6 +1512,16 @@ export const getDailyAttendanceSummary = async ({
     ]),
   );
 
+  const approvedLeaves = await findApprovedLeavesForAttendanceDate({
+    companyId,
+    companyAccessIds: employeeAccesses.map((access) => access._id),
+    date,
+  });
+
+  const approvedLeaveByAccessId = new Map(
+    approvedLeaves.map((leave) => [String(leave.companyAccessId), leave]),
+  );
+
   /**
    * ========================================================
    * BUILD DAILY SHEET ROWS
@@ -1463,6 +1532,9 @@ export const getDailyAttendanceSummary = async ({
     const employee = employeeByAccessId.get(String(access._id));
 
     const attendance = attendanceByAccessId.get(String(access._id)) || null;
+
+    const approvedLeave =
+      approvedLeaveByAccessId.get(String(access._id)) || null;
 
     const employeeUser = access.userId || null;
 
@@ -1500,7 +1572,15 @@ export const getDailyAttendanceSummary = async ({
 
       attendanceId: attendance?._id || null,
 
-      attendanceStatus: attendance?.attendanceStatus || "NOT_CHECKED_IN",
+      attendanceStatus:
+        attendance?.attendanceStatus ||
+        (workDay.classification === "WEEKLY_OFF"
+          ? "WEEKLY_OFF"
+          : workDay.classification === "HOLIDAY"
+            ? "HOLIDAY"
+            : approvedLeave
+              ? "ON_LEAVE"
+              : "NOT_CHECKED_IN"),
 
       attendance,
     };
@@ -1556,6 +1636,13 @@ export const getDailyAttendanceSummary = async ({
       halfDay: rows.filter((row) => row.attendanceStatus === "HALF_DAY").length,
 
       absent: rows.filter((row) => row.attendanceStatus === "ABSENT").length,
+
+      onLeave: rows.filter((row) => row.attendanceStatus === "ON_LEAVE").length,
+
+      holiday: rows.filter((row) => row.attendanceStatus === "HOLIDAY").length,
+
+      weeklyOff: rows.filter((row) => row.attendanceStatus === "WEEKLY_OFF")
+        .length,
     },
 
     pagination: {
@@ -1873,6 +1960,22 @@ export const checkInAttendance = async ({
       const timezone = company.timezone || "Asia/Kolkata";
 
       const attendanceDate = getAttendanceDateInTimezone(currentTime, timezone);
+
+      const workDay = await resolveWorkDay({
+        companyId,
+        date: attendanceDate,
+        session,
+      });
+
+      if (!workDay.isWorkingDay) {
+        const dayLabel =
+          workDay.classification === "WEEKLY_OFF" ? "weekly off" : "holiday";
+
+        throw new ApiError(
+          409,
+          `Attendance check-in is not allowed because today is a ${dayLabel}.`,
+        );
+      }
 
       const policy = await resolveActiveAttendancePolicy({
         companyId,
@@ -2562,6 +2665,11 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
     company.timezone || "Asia/Kolkata",
   );
 
+  const workDay = await resolveWorkDay({
+    companyId,
+    date: attendanceDate,
+  });
+
   const attendance = await Attendance.findOne({
     companyId,
 
@@ -2581,28 +2689,29 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
 
       attendance: null,
 
+      workDay: {
+        isWorkingDay: workDay.isWorkingDay,
+        classification: workDay.classification,
+        source: workDay.source,
+        name: workDay.name || "",
+        holidayType: workDay.holidayType || null,
+      },
+
       state: {
         checkedIn: false,
-
         onBreak: false,
-
         onFieldVisit: false,
 
-        canCheckIn: true,
+        canCheckIn: workDay.isWorkingDay === true,
 
         canStartBreak: false,
-
         canEndBreak: false,
-
         canStartFieldVisit: false,
-
         canCheckOut: false,
-
         activeFieldVisit: null,
       },
     };
   }
-
   const openSession = getOpenWorkSession(attendance);
 
   const activeBreak = getActiveBreak(attendance);
@@ -2633,6 +2742,14 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
 
     attendance,
 
+    workDay: {
+      isWorkingDay: workDay.isWorkingDay,
+      classification: workDay.classification,
+      source: workDay.source,
+      name: workDay.name || "",
+      holidayType: workDay.holidayType || null,
+    },
+
     state: {
       checkedIn: Boolean(openSession),
 
@@ -2640,7 +2757,11 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
 
       onFieldVisit: Boolean(activeFieldVisit),
 
-      canCheckIn: !openSession && !activeBreak && !activeFieldVisit,
+      canCheckIn:
+        workDay.isWorkingDay === true &&
+        !openSession &&
+        !activeBreak &&
+        !activeFieldVisit,
 
       canStartBreak: Boolean(openSession) && !activeBreak && !activeFieldVisit,
 

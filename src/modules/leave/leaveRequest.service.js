@@ -7,6 +7,7 @@ import LeaveBalance from "./leaveBalance.model.js";
 
 import Employee from "../employees/employee.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
+import { resolveWorkDay } from "../workCalendar/workCalendar.service.js";
 
 import {
   createLeaveBalance,
@@ -292,11 +293,13 @@ const findApplicableLeavePolicy = async ({ companyId, fromDate, session }) => {
  * may work Saturdays/Sundays or use different weekly offs.
  */
 
-const buildLeaveDateDetails = ({
+const buildLeaveDateDetails = async ({
+  companyId,
   fromDate,
   toDate,
   startDayPortion,
   endDayPortion,
+  session,
 }) => {
   const start = normalizeDateOnly(fromDate);
   const end = normalizeDateOnly(toDate);
@@ -332,12 +335,21 @@ const buildLeaveDateDetails = ({
   let currentDate = new Date(start);
 
   while (currentDate <= end) {
+    const dateKey = getDateKey(currentDate);
+
+    const workDay = await resolveWorkDay({
+      companyId,
+      date: dateKey,
+      session,
+    });
+
+    const isWorkingDay = workDay.isWorkingDay === true;
+
     let dayPortion = "FULL_DAY";
-    let leaveDays = 1;
+    let leaveDays = isWorkingDay ? 1 : 0;
 
-    if (singleDay) {
+    if (singleDay && isWorkingDay) {
       dayPortion = startDayPortion;
-
       leaveDays = dayPortion === "FULL_DAY" ? 1 : 0.5;
     }
 
@@ -346,11 +358,11 @@ const buildLeaveDateDetails = ({
 
       dayPortion,
 
-      dayClassification: "WORKING_DAY",
+      dayClassification: workDay.classification,
 
       leaveDays,
 
-      countedAsLeave: true,
+      countedAsLeave: isWorkingDay,
 
       attendanceId: null,
     });
@@ -902,15 +914,14 @@ const validateLeaveRequestRules = ({
       );
     }
 
+    const maximumBackdatedDays = Number(leaveType.maximumBackdatedDays ?? 0);
+
     const backdatedDays = Math.abs(differenceDays);
 
-    if (
-      Number(leaveType.maximumBackdatedDays || 0) > 0 &&
-      backdatedDays > Number(leaveType.maximumBackdatedDays)
-    ) {
+    if (backdatedDays > maximumBackdatedDays) {
       throw new ApiError(
         400,
-        `Backdated leave cannot exceed ${leaveType.maximumBackdatedDays} days.`,
+        `Backdated leave cannot exceed ${maximumBackdatedDays} days.`,
       );
     }
   }
@@ -1269,13 +1280,16 @@ export const previewLeaveRequest = async ({
       leavePolicy,
     });
 
-    let dateDetails = buildLeaveDateDetails({
+    let dateDetails = await buildLeaveDateDetails({
+      companyId,
       fromDate,
       toDate,
 
       startDayPortion: data.startDayPortion ?? "FULL_DAY",
 
       endDayPortion: data.endDayPortion ?? "FULL_DAY",
+
+      session,
     });
 
     const requestedDays = calculateRequestedDays(dateDetails);
@@ -1547,15 +1561,17 @@ export const createLeaveRequest = async ({
         leavePolicy,
       });
 
-      let dateDetails = buildLeaveDateDetails({
+      let dateDetails = await buildLeaveDateDetails({
+        companyId,
         fromDate,
         toDate,
 
         startDayPortion: data.startDayPortion ?? "FULL_DAY",
 
         endDayPortion: data.endDayPortion ?? "FULL_DAY",
-      });
 
+        session,
+      });
       const requestedDays = calculateRequestedDays(dateDetails);
 
       if (requestedDays <= 0) {

@@ -25,6 +25,7 @@ import companyAdministratorRoutes from "../modules/company-administrators/compan
 import clientRoutes from "../modules/clients/client.routes.js";
 import workCategoryRoutes from "../modules/work-categories/workCategory.routes.js";
 import attendanceRoutes from "../modules/attendance/attendance.routes.js";
+import workCalenderRoutes from "../modules/workCalendar/workCalendar.routes.js";
 import leavePolicyRoutes from "../modules/leave/leavePolicy.routes.js";
 import leaveTypeRoutes from "../modules/leave/leaveType.routes.js";
 import leaveBalanceRoutes from "../modules/leave/leaveBalance.routes.js";
@@ -112,6 +113,7 @@ router.use("/companies/:companyId/tasks", taskRoutes);
 
 router.use("/companies/:companyId/attendance", attendanceRoutes);
 
+router.use("/companies/:companyId/work-calendars", workCalenderRoutes);
 /**
  * Leave Management
  */

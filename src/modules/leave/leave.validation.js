@@ -134,12 +134,12 @@ const leavePolicyFields = {
 
   maximumFutureApplicationDays: z
     .union([
+      z.null(),
       z.coerce
         .number()
         .int("Maximum future application days must be a whole number.")
         .min(0, "Maximum future application days cannot be negative.")
         .max(1095, "Maximum future application days cannot exceed 1095 days."),
-      z.null(),
     ])
     .default(null),
 
@@ -295,6 +295,7 @@ export const updateLeavePolicySchema = z.object({
 
       maximumFutureApplicationDays: z
         .union([
+          z.null(),
           z.coerce
             .number()
             .int("Maximum future application days must be a whole number.")
@@ -303,7 +304,6 @@ export const updateLeavePolicySchema = z.object({
               1095,
               "Maximum future application days cannot exceed 1095 days.",
             ),
-          z.null(),
         ])
         .optional(),
       requireReason: z.boolean().optional(),
@@ -537,7 +537,9 @@ export const updateLeaveTypeSchema = z.object({
 
       annualEntitlementDays: halfDayNumberSchema.max(366).optional(),
 
-      allocationMethod: allocationMethodSchema.optional(),
+      allocationMethod: z
+        .enum(["ANNUAL_UPFRONT", "MONTHLY_ACCRUAL", "MANUAL", "NO_BALANCE"])
+        .optional(),
 
       monthlyEntitlementDays: halfDayNumberSchema.max(31).optional(),
 
@@ -546,15 +548,28 @@ export const updateLeaveTypeSchema = z.object({
       allowMonthlyAccumulation: z.boolean().optional(),
       allowHalfDay: z.boolean().optional(),
 
-      minimumServiceDays: leaveTypeFields.minimumServiceDays.optional(),
-      minimumNoticeDays: leaveTypeFields.minimumNoticeDays.optional(),
-
+      minimumServiceDays: z.coerce
+        .number()
+        .int("Minimum service days must be a whole number.")
+        .min(0)
+        .max(3650)
+        .optional(),
+      minimumNoticeDays: z.coerce
+        .number()
+        .int("Minimum notice days must be a whole number.")
+        .min(0)
+        .max(365)
+        .optional(),
       maximumConsecutiveDays: optionalPositiveHalfDayNumberSchema,
 
       allowBackdatedApplication: z.boolean().optional(),
 
-      maximumBackdatedDays: leaveTypeFields.maximumBackdatedDays.optional(),
-
+      maximumBackdatedDays: z.coerce
+        .number()
+        .int("Maximum backdated days must be a whole number.")
+        .min(0)
+        .max(365)
+        .optional(),
       requireAttachment: z.boolean().optional(),
 
       attachmentRequiredFromDays: optionalPositiveHalfDayNumberSchema,
@@ -563,7 +578,6 @@ export const updateLeaveTypeSchema = z.object({
       carryForwardEnabled: z.boolean().optional(),
 
       maximumCarryForwardDays: halfDayNumberSchema.max(366).optional(),
-
       effectiveFrom: z.coerce.date().optional(),
       effectiveTo: optionalNullableDate,
 

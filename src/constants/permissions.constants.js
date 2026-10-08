@@ -12,6 +12,7 @@ export const PERMISSION_MODULES = Object.freeze({
   WORK_CATEGORY: "work_category",
 
   LEAVE: "leave",
+  CALENDAR: "calendar",
   ATTENDANCE: "attendance",
   REPORT: "report",
   ANNOUNCEMENT: "announcement",
@@ -91,6 +92,9 @@ export const PERMISSIONS = Object.freeze({
 
   LEAVE_BALANCE_READ: "leave.balance_read",
   LEAVE_BALANCE_MANAGE: "leave.balance_manage",
+
+  CALENDAR_READ: "calendar.read",
+  CALENDAR_MANAGE: "calendar.manage",
 
   ATTENDANCE_CHECK_IN: "attendance.check_in",
   ATTENDANCE_CHECK_OUT: "attendance.check_out",
