@@ -285,10 +285,6 @@ const findApplicableLeavePolicy = async ({ companyId, fromDate, session }) => {
  *
  * V1:
  * We generate all dates as WORKING_DAY.
- *
- * Weekly-off/public-holiday exclusion will be connected to the
- * company's working-calendar/holiday configuration.
- *
  * We deliberately do not guess weekends because some companies
  * may work Saturdays/Sundays or use different weekly offs.
  */
@@ -312,16 +308,6 @@ const buildLeaveDateDetails = async ({
   }
 
   const singleDay = getDateKey(start) === getDateKey(end);
-
-  if (
-    !singleDay &&
-    (startDayPortion !== "FULL_DAY" || endDayPortion !== "FULL_DAY")
-  ) {
-    throw new ApiError(
-      400,
-      "Half-day leave is currently supported only for single-day requests.",
-    );
-  }
 
   if (singleDay && startDayPortion !== endDayPortion) {
     throw new ApiError(
@@ -348,8 +334,18 @@ const buildLeaveDateDetails = async ({
     let dayPortion = "FULL_DAY";
     let leaveDays = isWorkingDay ? 1 : 0;
 
-    if (singleDay && isWorkingDay) {
-      dayPortion = startDayPortion;
+    if (isWorkingDay) {
+      const isStartDate = dateKey === getDateKey(start);
+      const isEndDate = dateKey === getDateKey(end);
+
+      if (singleDay) {
+        dayPortion = startDayPortion;
+      } else if (isStartDate) {
+        dayPortion = startDayPortion;
+      } else if (isEndDate) {
+        dayPortion = endDayPortion;
+      }
+
       leaveDays = dayPortion === "FULL_DAY" ? 1 : 0.5;
     }
 
@@ -879,6 +875,8 @@ const validateLeaveRequestRules = ({
   fromDate,
   requestedDays,
   attachmentUrl,
+  startDayPortion,
+  endDayPortion,
 }) => {
   const today = normalizeDateOnly(new Date());
   const start = normalizeDateOnly(fromDate);
@@ -889,7 +887,10 @@ const validateLeaveRequestRules = ({
     differenceMilliseconds / (24 * 60 * 60 * 1000),
   );
 
-  if (leaveType.allowHalfDay === false && !Number.isInteger(requestedDays)) {
+  if (
+    leaveType.allowHalfDay === false &&
+    (startDayPortion !== "FULL_DAY" || endDayPortion !== "FULL_DAY")
+  ) {
     throw new ApiError(
       400,
       "Half-day leave is not allowed for this leave type.",
@@ -1308,6 +1309,8 @@ export const previewLeaveRequest = async ({
       fromDate,
       requestedDays,
       attachmentUrl: data.attachmentUrl,
+      startDayPortion: data.startDayPortion ?? "FULL_DAY",
+      endDayPortion: data.endDayPortion ?? "FULL_DAY",
     });
 
     /**
@@ -1588,6 +1591,8 @@ export const createLeaveRequest = async ({
         fromDate,
         requestedDays,
         attachmentUrl: data.attachmentUrl,
+        startDayPortion: data.startDayPortion ?? "FULL_DAY",
+        endDayPortion: data.endDayPortion ?? "FULL_DAY",
       });
 
       /**

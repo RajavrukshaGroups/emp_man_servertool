@@ -1003,19 +1003,6 @@ export const createLeaveRequestSchema = z.object({
 
       const isSingleDayRequest = fromDateKey === toDateKey;
 
-      if (
-        !isSingleDayRequest &&
-        (body.startDayPortion !== "FULL_DAY" ||
-          body.endDayPortion !== "FULL_DAY")
-      ) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["startDayPortion"],
-          message:
-            "Half-day leave is currently supported only for single-day requests.",
-        });
-      }
-
       if (isSingleDayRequest && body.startDayPortion !== body.endDayPortion) {
         context.addIssue({
           code: z.ZodIssueCode.custom,

@@ -370,10 +370,12 @@ const leaveRequestSchema = new mongoose.Schema(
     },
 
     /**
-     * Requested portion for the first and final dates.
+     * Requested portions for the first and final dates.
      *
-     * Multi-day requests will normally use FULL_DAY for both.
-     * Half-day requests must use the same fromDate and toDate.
+     * Single-day requests must use matching portions.
+     * Multi-day requests may independently specify
+     * the first and final day's portions.
+     * Intermediate working dates are full days.
      */
     startDayPortion: {
       type: String,
@@ -762,15 +764,6 @@ leaveRequestSchema.pre("validate", function () {
 
   const isSingleDayRequest =
     fromDateKey && toDateKey && fromDateKey === toDateKey;
-
-  if (
-    !isSingleDayRequest &&
-    (this.startDayPortion !== "FULL_DAY" || this.endDayPortion !== "FULL_DAY")
-  ) {
-    throw new Error(
-      "Half-day leave is currently supported only for single-day requests.",
-    );
-  }
 
   if (isSingleDayRequest && this.startDayPortion !== this.endDayPortion) {
     throw new Error(

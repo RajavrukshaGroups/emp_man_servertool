@@ -1075,12 +1075,26 @@ export const recalculateAttendance = async ({
     throw new ApiError(404, "Attendance record not found.");
   }
 
+  const workDay = await resolveWorkDay({
+    companyId: attendance.companyId,
+    date: attendance.attendanceDate,
+    session,
+  });
+
+  const shouldApplyShiftRules = workDay.isWorkingDay;
+
   const result = calculateAttendanceTotals({
     workSessions: attendance.workSessions || [],
 
     breaks: attendance.breaks || [],
 
-    shiftSnapshot: attendance.shiftSnapshot,
+    shiftSnapshot: shouldApplyShiftRules
+      ? attendance.shiftSnapshot
+      : {
+          ...attendance.shiftSnapshot,
+          startTime: null,
+          endTime: null,
+        },
 
     compensationPolicySnapshot: attendance.compensationPolicySnapshot || {},
 
@@ -1536,6 +1550,20 @@ export const getDailyAttendanceSummary = async ({
     const approvedLeave =
       approvedLeaveByAccessId.get(String(access._id)) || null;
 
+    const approvedLeaveDateDetail =
+      approvedLeave?.dateDetails?.find(
+        (detail) =>
+          new Date(detail.date).toISOString().slice(0, 10) === date &&
+          detail.countedAsLeave === true,
+      ) || null;
+
+    const hasAttendanceActivity = Boolean(
+      attendance?.workSessions?.some((session) => session.checkInAt),
+    );
+
+    const hasLeaveAttendanceConflict =
+      Boolean(approvedLeaveDateDetail) && hasAttendanceActivity;
+
     const employeeUser = access.userId || null;
 
     return {
@@ -1571,6 +1599,27 @@ export const getDailyAttendanceSummary = async ({
       attendanceDate: date,
 
       attendanceId: attendance?._id || null,
+
+      workDay: {
+        isWorkingDay: workDay.isWorkingDay,
+        classification: workDay.classification,
+        source: workDay.source,
+        name: workDay.name || "",
+      },
+
+      approvedLeave: approvedLeaveDateDetail
+        ? {
+            leaveRequestId: approvedLeave._id,
+            leaveTypeId: approvedLeave.leaveTypeId,
+            dayPortion: approvedLeaveDateDetail.dayPortion,
+            leaveDays: approvedLeaveDateDetail.leaveDays,
+            paidDays: approvedLeaveDateDetail.paidDays,
+            unpaidDays: approvedLeaveDateDetail.unpaidDays,
+            allocationType: approvedLeaveDateDetail.allocationType,
+          }
+        : null,
+
+      hasLeaveAttendanceConflict,
 
       attendanceStatus:
         attendance?.attendanceStatus ||
@@ -1966,16 +2015,6 @@ export const checkInAttendance = async ({
         date: attendanceDate,
         session,
       });
-
-      if (!workDay.isWorkingDay) {
-        const dayLabel =
-          workDay.classification === "WEEKLY_OFF" ? "weekly off" : "holiday";
-
-        throw new ApiError(
-          409,
-          `Attendance check-in is not allowed because today is a ${dayLabel}.`,
-        );
-      }
 
       const policy = await resolveActiveAttendancePolicy({
         companyId,
@@ -2702,8 +2741,7 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
         onBreak: false,
         onFieldVisit: false,
 
-        canCheckIn: workDay.isWorkingDay === true,
-
+        canCheckIn: true,
         canStartBreak: false,
         canEndBreak: false,
         canStartFieldVisit: false,
@@ -2757,12 +2795,7 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
 
       onFieldVisit: Boolean(activeFieldVisit),
 
-      canCheckIn:
-        workDay.isWorkingDay === true &&
-        !openSession &&
-        !activeBreak &&
-        !activeFieldVisit,
-
+      canCheckIn: !openSession && !activeBreak && !activeFieldVisit,
       canStartBreak: Boolean(openSession) && !activeBreak && !activeFieldVisit,
 
       canEndBreak: Boolean(activeBreak),
