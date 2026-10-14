@@ -231,10 +231,7 @@ export const buildReadableLeaveCompanyAccessFilter = async ({
   /**
    * Defensive tenant check.
    */
-  if (
-    requesterContext.companyId &&
-    !idsEqual(requesterContext.companyId, companyId)
-  ) {
+  if (!idsEqual(requesterContext.companyId, companyId)) {
     return {
       _id: {
         $in: [],
@@ -370,6 +367,15 @@ export const buildLeaveRequestReadFilter = async ({
   session = null,
 }) => {
   if (
+    requesterContext.accessType !== "GLOBAL" &&
+    requesterContext.roleScopeType !== "GLOBAL" &&
+    !idsEqual(requesterContext.companyId, companyId)
+  ) {
+    return {
+      _id: { $in: [] },
+    };
+  }
+  if (
     requesterContext.accessType === "GLOBAL" ||
     requesterContext.roleScopeType === "GLOBAL" ||
     requesterContext.roleScopeType === "COMPANY"
@@ -408,6 +414,15 @@ export const canAccessLeaveCompanyAccess = async ({
   session = null,
 }) => {
   if (!targetCompanyAccessId) {
+    return false;
+  }
+
+  // Enforce company isolation before checking self or role scope.
+  if (
+    requesterContext.accessType !== "GLOBAL" &&
+    requesterContext.roleScopeType !== "GLOBAL" &&
+    !idsEqual(requesterContext.companyId, companyId)
+  ) {
     return false;
   }
 
@@ -472,6 +487,15 @@ export const canManageLeaveCompanyAccess = async ({
   session = null,
 }) => {
   if (!targetCompanyAccessId) {
+    return false;
+  }
+
+  // Enforce tenant isolation before checking self or managerial scope.
+  if (
+    requesterContext.accessType !== "GLOBAL" &&
+    requesterContext.roleScopeType !== "GLOBAL" &&
+    !idsEqual(requesterContext.companyId, companyId)
+  ) {
     return false;
   }
 

@@ -362,6 +362,31 @@ export const getMyAttendanceHistorySchema = z.object({
 
 /**
  * ============================================================
+ * MY ATTENDANCE CALENDAR
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/me/calendar
+ *
+ * Example:
+ * ?month=2026-10
+ */
+
+export const getMyAttendanceCalendarSchema = z.object({
+  params: attendanceCompanyParamsSchema,
+
+  query: z
+    .object({
+      month: z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Month must use YYYY-MM format."),
+    })
+    .strict(),
+
+  body: emptyBodySchema,
+});
+
+/**
+ * ============================================================
  * GET ATTENDANCE
  * ============================================================
  */

@@ -2633,13 +2633,24 @@ export const cancelLeaveRequest = async ({
         session,
       });
 
+      // SECURITY: Prevent cross-company leave cancellation.
+      if (
+        requesterContext.accessType !== "GLOBAL" &&
+        requesterContext.roleScopeType !== "GLOBAL" &&
+        String(requesterContext.companyId) !== String(companyId)
+      ) {
+        throw new ApiError(
+          403,
+          "You cannot cancel leave requests belonging to another company.",
+        );
+      }
+
       if (request.status !== "PENDING" && request.status !== "RECOMMENDED") {
         throw new ApiError(
           409,
           "Only pending or recommended leave requests can be cancelled directly.",
         );
       }
-
       /**
        * SECURITY:
        * Direct cancellation is a self-service employee action.
@@ -2754,6 +2765,18 @@ export const requestApprovedLeaveCancellation = async ({
         leaveRequestId,
         session,
       });
+
+      // SECURITY: Prevent cross-company approved-leave cancellation requests.
+      if (
+        requesterContext.accessType !== "GLOBAL" &&
+        requesterContext.roleScopeType !== "GLOBAL" &&
+        String(requesterContext.companyId) !== String(companyId)
+      ) {
+        throw new ApiError(
+          403,
+          "You cannot request cancellation of leave belonging to another company.",
+        );
+      }
 
       /**
        * SECURITY:

@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
 
 import { ApiError } from "../../utils/ApiError.js";
-import { resolveWorkDay } from "../workCalendar/workCalendar.service.js";
+import {
+  resolveWorkDay,
+  resolveWorkCalendarRange,
+} from "../workCalendar/workCalendar.service.js";
 
 import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
@@ -1083,18 +1086,29 @@ export const recalculateAttendance = async ({
 
   const shouldApplyShiftRules = workDay.isWorkingDay;
 
+  // Convert Mongoose subdocument into a plain JavaScript object
+  // so all shift configuration values are preserved.
+  const shiftSnapshot =
+    typeof attendance.shiftSnapshot?.toObject === "function"
+      ? attendance.shiftSnapshot.toObject()
+      : { ...(attendance.shiftSnapshot || {}) };
+
+  // On weekly offs and holidays, preserve working-hour thresholds
+  // but disable normal shift start/end timing penalties.
+  const effectiveShiftSnapshot = shouldApplyShiftRules
+    ? shiftSnapshot
+    : {
+        ...shiftSnapshot,
+        startTime: null,
+        endTime: null,
+      };
+
   const result = calculateAttendanceTotals({
     workSessions: attendance.workSessions || [],
 
     breaks: attendance.breaks || [],
 
-    shiftSnapshot: shouldApplyShiftRules
-      ? attendance.shiftSnapshot
-      : {
-          ...attendance.shiftSnapshot,
-          startTime: null,
-          endTime: null,
-        },
+    shiftSnapshot: effectiveShiftSnapshot,
 
     compensationPolicySnapshot: attendance.compensationPolicySnapshot || {},
 
@@ -1102,7 +1116,6 @@ export const recalculateAttendance = async ({
 
     timezone,
   });
-
   attendance.firstCheckInAt = result.firstCheckInAt;
 
   attendance.lastCheckOutAt = result.lastCheckOutAt;
@@ -1975,6 +1988,200 @@ export const getMyAttendanceHistory = async ({
 
       hasPreviousPage: page > 1,
     },
+  };
+};
+
+/**
+ * ============================================================
+ * MY ATTENDANCE + APPROVED LEAVE CALENDAR
+ * ============================================================
+ *
+ * Read-only monthly calendar.
+ * No Attendance or LeaveRequest documents are modified.
+ */
+
+export const getMyAttendanceCalendar = async ({
+  companyId,
+  query = {},
+  requesterContext,
+}) => {
+  const company = await resolveAttendanceCompany(companyId);
+
+  const { companyAccess, employee } = await resolveSelfAttendanceContext({
+    companyId,
+    requesterContext,
+  });
+
+  const { month } = query;
+  const [year, monthNumber] = month.split("-").map(Number);
+
+  const fromDate = `${month}-01`;
+
+  const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+
+  const toDate = `${month}-${String(daysInMonth).padStart(2, "0")}`;
+
+  const [attendanceRecords, approvedLeaves, workCalendar] = await Promise.all([
+    Attendance.find({
+      companyId,
+      companyAccessId: companyAccess._id,
+      isDeleted: false,
+      attendanceDate: {
+        $gte: fromDate,
+        $lte: toDate,
+      },
+    }).lean(),
+
+    LeaveRequest.find({
+      companyId,
+      companyAccessId: companyAccess._id,
+      status: "APPROVED",
+      isDeleted: false,
+      dateDetails: {
+        $elemMatch: {
+          date: {
+            $gte: new Date(`${fromDate}T00:00:00.000Z`),
+            $lte: new Date(`${toDate}T23:59:59.999Z`),
+          },
+          countedAsLeave: true,
+        },
+      },
+    })
+      .select(
+        "_id leaveTypeId fromDate toDate dateDetails status cancellationStatus",
+      )
+      .lean(),
+
+    resolveWorkCalendarRange({
+      companyId,
+      fromDate,
+      toDate,
+    }),
+  ]);
+
+  const attendanceByDate = new Map(
+    attendanceRecords.map((attendance) => [
+      attendance.attendanceDate,
+      attendance,
+    ]),
+  );
+
+  const leavesByDate = new Map();
+
+  for (const leave of approvedLeaves) {
+    for (const detail of leave.dateDetails || []) {
+      if (!detail.countedAsLeave) continue;
+
+      const date = new Date(detail.date).toISOString().slice(0, 10);
+
+      if (date < fromDate || date > toDate) continue;
+
+      if (!leavesByDate.has(date)) {
+        leavesByDate.set(date, []);
+      }
+
+      leavesByDate.get(date).push({
+        leaveRequestId: leave._id,
+        leaveTypeId: leave.leaveTypeId,
+        dayPortion: detail.dayPortion,
+        leaveDays: detail.leaveDays,
+        paidDays: detail.paidDays,
+        unpaidDays: detail.unpaidDays,
+        allocationType: detail.allocationType,
+      });
+    }
+  }
+
+  const workDays = workCalendar.days;
+
+  const workDayByDate = new Map(workDays.map((day) => [day.date, day]));
+
+  const today = getAttendanceDateInTimezone(
+    new Date(),
+    company.timezone || "Asia/Kolkata",
+  );
+
+  const days = [];
+
+  for (let dayNumber = 1; dayNumber <= daysInMonth; dayNumber++) {
+    const date = `${month}-${String(dayNumber).padStart(2, "0")}`;
+
+    const attendance = attendanceByDate.get(date) || null;
+    const approvedLeavesForDate = leavesByDate.get(date) || [];
+    const workDay = workDayByDate.get(date) || null;
+
+    const totalLeaveDays = approvedLeavesForDate.reduce(
+      (sum, leave) => sum + Number(leave.leaveDays || 0),
+      0,
+    );
+
+    const hasAttendanceActivity = Boolean(
+      attendance?.workSessions?.some((session) => session.checkInAt),
+    );
+
+    const hasLeaveAttendanceConflict =
+      approvedLeavesForDate.length > 0 && hasAttendanceActivity;
+
+    let displayStatus;
+
+    if (attendance) {
+      displayStatus = attendance.attendanceStatus;
+    } else if (workDay?.classification === "HOLIDAY") {
+      displayStatus = "HOLIDAY";
+    } else if (workDay?.classification === "WEEKLY_OFF") {
+      displayStatus = "WEEKLY_OFF";
+    } else if (totalLeaveDays >= 1) {
+      displayStatus = "ON_LEAVE";
+    } else if (totalLeaveDays > 0) {
+      displayStatus = "PARTIAL_LEAVE";
+    } else if (date > today) {
+      displayStatus = "UPCOMING";
+    } else {
+      displayStatus = "NO_ATTENDANCE_RECORDED";
+    }
+
+    days.push({
+      date,
+      displayStatus,
+
+      workDay: workDay
+        ? {
+            isWorkingDay: workDay.isWorkingDay,
+            classification: workDay.classification,
+            source: workDay.source,
+            name: workDay.name || "",
+          }
+        : null,
+
+      attendanceId: attendance?._id || null,
+      attendanceStatus: attendance?.attendanceStatus || null,
+
+      attendance: attendance
+        ? {
+            firstCheckInAt: attendance.firstCheckInAt,
+            lastCheckOutAt: attendance.lastCheckOutAt,
+            totalWorkedMinutes: attendance.totalWorkedMinutes,
+            totalBreakMinutes: attendance.totalBreakMinutes,
+            isLate: attendance.isLate,
+            isEarlyCheckout: attendance.isEarlyCheckout,
+            calculationStatus: attendance.calculationStatus,
+          }
+        : null,
+
+      approvedLeaves: approvedLeavesForDate,
+      totalLeaveDays,
+      hasLeaveAttendanceConflict,
+    });
+  }
+
+  return {
+    month,
+    fromDate,
+    toDate,
+    timezone: company.timezone || "Asia/Kolkata",
+    employeeId: employee._id,
+    companyAccessId: companyAccess._id,
+    days,
   };
 };
 

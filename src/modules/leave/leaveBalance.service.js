@@ -1633,6 +1633,7 @@ export const accrueMonthlyLeaveBalance = async ({
   periodDate,
   requesterContext,
   session: externalSession = null,
+  operationResult = null,
 }) => {
   const ownSession = !externalSession;
   const session = externalSession ?? (await mongoose.startSession());
@@ -1683,15 +1684,22 @@ export const accrueMonthlyLeaveBalance = async ({
       (existingMonthlyBalance.isAccrued === true ||
         Number(existingMonthlyBalance.creditedDays || 0) > 0);
 
-    if (existingBucketIsAccrued) {
-      updatedBalance = balance;
-      return;
-    }
-
     const periodStart = new Date(`${periodKey}-01T00:00:00.000Z`);
 
+    const periodEnd = new Date(
+      Date.UTC(
+        periodStart.getUTCFullYear(),
+        periodStart.getUTCMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+        999,
+      ),
+    );
+
     if (
-      periodStart < new Date(balance.leaveYearStart) ||
+      periodEnd < new Date(balance.leaveYearStart) ||
       periodStart > new Date(balance.leaveYearEnd)
     ) {
       throw new ApiError(
@@ -1700,6 +1708,34 @@ export const accrueMonthlyLeaveBalance = async ({
       );
     }
 
+    /**
+     * Prevent accrual for months before the employee joined.
+     *
+     * This must be enforced here as well because this function
+     * can be called independently of the bulk accrual service.
+     */
+    const { employee, companyAccess } = await resolveEmployeeContext({
+      companyId,
+      employeeId: balance.employeeId,
+      session,
+    });
+
+    if (employee.status !== "ACTIVE" || companyAccess.status !== "ACTIVE") {
+      throw new ApiError(
+        409,
+        "Monthly accrual requires an active employee and company access.",
+      );
+    }
+
+    if (
+      companyAccess.joiningDate &&
+      new Date(companyAccess.joiningDate) > periodEnd
+    ) {
+      throw new ApiError(
+        409,
+        `Employee is not eligible for monthly accrual in ${periodKey} because their joining date is after this period.`,
+      );
+    }
     /**
      * The requested accrual month must overlap the leave type's
      * effective date range.
@@ -1714,18 +1750,6 @@ export const accrueMonthlyLeaveBalance = async ({
      * August 2026 is invalid because the leave type was not yet
      * effective during that month.
      */
-    const periodEnd = new Date(
-      Date.UTC(
-        periodStart.getUTCFullYear(),
-        periodStart.getUTCMonth() + 1,
-        0,
-        23,
-        59,
-        59,
-        999,
-      ),
-    );
-
     const leaveTypeEffectiveFrom = new Date(leaveType.effectiveFrom);
     const leaveTypeEffectiveTo = leaveType.effectiveTo
       ? new Date(leaveType.effectiveTo)
@@ -1739,6 +1763,15 @@ export const accrueMonthlyLeaveBalance = async ({
         400,
         `The leave type is not effective for accrual period ${periodKey}.`,
       );
+    }
+
+    if (existingBucketIsAccrued) {
+      if (operationResult) {
+        operationResult.status = "ALREADY_ACCRUED";
+      }
+
+      updatedBalance = balance;
+      return;
     }
 
     /**
@@ -1820,13 +1853,20 @@ export const accrueMonthlyLeaveBalance = async ({
     balance.accruedDays = roundToHalfDay(
       Number(balance.accruedDays || 0) + creditedDays,
     );
-    balance.lastAccruedPeriodKey = periodKey;
+    balance.lastAccruedPeriodKey =
+      !balance.lastAccruedPeriodKey || periodKey > balance.lastAccruedPeriodKey
+        ? periodKey
+        : balance.lastAccruedPeriodKey;
 
     balance.updatedBy = requesterContext.userId ?? null;
 
     await balance.save({
       session,
     });
+
+    if (operationResult) {
+      operationResult.status = "ACCRUED";
+    }
 
     updatedBalance = balance;
   };
@@ -1952,11 +1992,11 @@ export const accrueBulkMonthlyLeaveBalances = async ({
       alreadyAccrued: 0,
       skippedInactiveEmployee: 0,
       skippedInactiveCompanyAccess: 0,
+      skippedBeforeJoiningDate: 0, // ADD THIS
       failed: 0,
       failures: [],
     };
   }
-
   /**
    * ============================================================
    * 2. FIND APPLICABLE MONTHLY BALANCES
@@ -1994,8 +2034,8 @@ export const accrueBulkMonthlyLeaveBalances = async ({
   let alreadyAccrued = 0;
   let skippedInactiveEmployee = 0;
   let skippedInactiveCompanyAccess = 0;
+  let skippedBeforeJoiningDate = 0;
   let failed = 0;
-
   const failures = [];
 
   while (true) {
@@ -2063,7 +2103,7 @@ export const accrueBulkMonthlyLeaveBalances = async ({
         status: "ACTIVE",
         isDeleted: false,
       })
-        .select("_id")
+        .select("_id joiningDate")
         .lean(),
     ]);
 
@@ -2073,6 +2113,13 @@ export const accrueBulkMonthlyLeaveBalances = async ({
 
     const activeCompanyAccessIds = new Set(
       activeCompanyAccessRecords.map((access) => access._id.toString()),
+    );
+
+    const companyAccessMap = new Map(
+      activeCompanyAccessRecords.map((access) => [
+        access._id.toString(),
+        access,
+      ]),
     );
 
     for (const balance of balances) {
@@ -2097,6 +2144,18 @@ export const accrueBulkMonthlyLeaveBalances = async ({
         !activeCompanyAccessIds.has(balance.companyAccessId.toString())
       ) {
         skippedInactiveCompanyAccess += 1;
+        continue;
+      }
+
+      const companyAccess = companyAccessMap.get(
+        balance.companyAccessId.toString(),
+      );
+
+      if (
+        companyAccess?.joiningDate &&
+        new Date(companyAccess.joiningDate) > periodEnd
+      ) {
+        skippedBeforeJoiningDate += 1;
         continue;
       }
 
@@ -2126,26 +2185,24 @@ export const accrueBulkMonthlyLeaveBalances = async ({
         /**
          * Reuse the authoritative individual accrual operation.
          */
-        const updatedBalance = await accrueMonthlyLeaveBalance({
+        const operationResult = {};
+
+        await accrueMonthlyLeaveBalance({
           companyId,
           balanceId: balance._id,
           periodDate: parsedPeriodDate,
           requesterContext,
+          operationResult,
         });
 
-        const updatedBucket = updatedBalance?.monthlyBalances?.find(
-          (item) => item.periodKey === periodKey,
-        );
-
-        const isAccruedNow =
-          updatedBucket &&
-          (updatedBucket.isAccrued === true ||
-            Number(updatedBucket.creditedDays || 0) > 0);
-
-        if (isAccruedNow) {
+        if (operationResult.status === "ACCRUED") {
           accrued += 1;
-        } else {
+        } else if (operationResult.status === "ALREADY_ACCRUED") {
           alreadyAccrued += 1;
+        } else {
+          throw new Error(
+            `Unexpected monthly accrual result for balance ${balance._id}`,
+          );
         }
       } catch (error) {
         failed += 1;
@@ -2166,6 +2223,7 @@ export const accrueBulkMonthlyLeaveBalances = async ({
     alreadyAccrued,
     skippedInactiveEmployee,
     skippedInactiveCompanyAccess,
+    skippedBeforeJoiningDate, // ADD THIS
     failed,
     failures,
   };

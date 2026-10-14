@@ -8,6 +8,7 @@ import {
   getMyTodayAttendance,
   listAttendances,
   startAttendanceBreak,
+  getMyAttendanceCalendar,
 } from "./attendance.service.js";
 
 import { getAttendanceRequesterContext } from "./attendance.scope.js";
@@ -251,6 +252,37 @@ export const getMyAttendanceHistory = async (req, res, next) => {
     });
   } catch (error) {
     return next(error);
+  }
+};
+
+/**
+ * ============================================================
+ * MY ATTENDANCE CALENDAR
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/me/calendar
+ */
+
+export const getMyAttendanceCalendarController = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const requesterContext = getAttendanceRequesterContext(req);
+
+    const result = await getMyAttendanceCalendar({
+      companyId,
+      query: req.validated.query,
+      requesterContext,
+    });
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Attendance calendar fetched successfully.",
+      data: result,
+    });
+  } catch (error) {
+    next(error);
   }
 };
 

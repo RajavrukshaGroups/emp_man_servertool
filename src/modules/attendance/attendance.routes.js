@@ -14,6 +14,7 @@ import {
   endBreakSchema,
   getMyTodayAttendanceSchema,
   getMyAttendanceHistorySchema,
+  getMyAttendanceCalendarSchema,
   listAttendanceSchema,
   getAttendanceSchema,
   createAttendancePolicySchema,
@@ -56,6 +57,7 @@ import {
   checkOut,
   getMyToday,
   getMyAttendanceHistory,
+  getMyAttendanceCalendarController,
   listAttendance,
   getAttendance,
   getDailySummary,
@@ -309,6 +311,21 @@ router.get(
   authorize(PERMISSIONS.ATTENDANCE_READ),
   validate(getMyAttendanceHistorySchema),
   getMyAttendanceHistory,
+);
+
+/**
+ * ============================================================
+ * MY ATTENDANCE + APPROVED LEAVE CALENDAR
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/me/calendar?month=2026-10
+ */
+
+router.get(
+  "/me/calendar",
+  authorize(PERMISSIONS.ATTENDANCE_READ),
+  validate(getMyAttendanceCalendarSchema),
+  getMyAttendanceCalendarController,
 );
 
 /**
