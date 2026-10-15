@@ -15,7 +15,7 @@ const optionalText = (maximumLength) =>
 const nameSchema = z
   .string()
   .trim()
-  .min(2, "Name must contain at least 2 characters.")
+  .min(1, "Name is required.")
   .max(50, "Name cannot exceed 50 characters.")
   .regex(
     /^[A-Za-zÀ-ÖØ-öø-ÿ' -]+$/,
@@ -55,11 +55,7 @@ export const createUserSchema = z.object({
 
       middleName: nameSchema.optional().or(z.literal("")),
 
-      lastName: z
-        .string()
-        .trim()
-        .min(1, "Last name is required.")
-        .max(50, "Last name cannot exceed 50 characters."),
+      lastName: z.string().trim().max(50).optional().default(""),
 
       displayName: optionalText(120),
 
@@ -107,8 +103,8 @@ export const updateUserSchema = z.object({
 
       middleName: nameSchema.optional().or(z.literal("")),
 
-      lastName: z.string().trim().min(1).max(50).optional(),
-
+      lastName: z.string().trim().max(50).optional(),
+      
       displayName: optionalText(120),
 
       email: emailSchema.optional(),
