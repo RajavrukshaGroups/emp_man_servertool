@@ -1173,13 +1173,19 @@ export const calculateAttendanceTotals = ({
    *
    * Compensation does not falsify worked time.
    */
-  const attendanceStatus = determineWorkedAttendanceStatus({
-    workedMinutes: totalWorkedMinutes,
+  // An attendance day with an open work session is not finalized.
+  // Preserve PENDING until all work sessions are closed.
+  const hasOpenSession = workSessions.some(
+    (session) => session.status === "OPEN" && !session.checkOutAt,
+  );
 
-    fullDayMinutes: shiftSnapshot?.fullDayMinutes || 0,
-
-    halfDayMinutes: shiftSnapshot?.halfDayMinutes || 0,
-  });
+  const attendanceStatus = hasOpenSession
+    ? "PENDING"
+    : determineWorkedAttendanceStatus({
+        workedMinutes: totalWorkedMinutes,
+        fullDayMinutes: shiftSnapshot?.fullDayMinutes || 0,
+        halfDayMinutes: shiftSnapshot?.halfDayMinutes || 0,
+      });
 
   return {
     firstCheckInAt,

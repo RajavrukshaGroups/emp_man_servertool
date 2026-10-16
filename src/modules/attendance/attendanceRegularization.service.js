@@ -1262,20 +1262,33 @@ const validateBreakWithinWorkSession = (attendance) => {
     const breakEnd = new Date(attendanceBreak.endedAt);
 
     const containingSession = workSessions.find((workSession) => {
-      if (!workSession.checkInAt || !workSession.checkOutAt) {
+      if (!workSession.checkInAt) {
         return false;
       }
 
       const sessionStart = new Date(workSession.checkInAt);
-      const sessionEnd = new Date(workSession.checkOutAt);
 
-      return breakStart >= sessionStart && breakEnd <= sessionEnd;
+      // Break cannot begin before the work session.
+      if (breakStart < sessionStart) {
+        return false;
+      }
+
+      // A closed work session must contain the entire break.
+      if (workSession.checkOutAt) {
+        const sessionEnd = new Date(workSession.checkOutAt);
+
+        return breakEnd <= sessionEnd;
+      }
+
+      // An open work session can contain a completed break.
+      // Both break timestamps must already be in the past.
+      return breakEnd <= new Date() && breakEnd > breakStart;
     });
 
     if (!containingSession) {
       throw new ApiError(
         409,
-        "A break must occur entirely within a completed work session.",
+        "A break must occur entirely within a valid work session.",
       );
     }
   }

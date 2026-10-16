@@ -1122,7 +1122,9 @@ export const recalculateAttendance = async ({
 
   attendance.totalWorkedMinutes = result.totalWorkedMinutes;
 
-  attendance.totalBreakMinutes = result.totalBreakMinutes;
+  attendance.totalBreakMinutes = hasOpenWorkSession(attendance)
+    ? calculateTotalBreakMinutes(attendance.breaks || [])
+    : result.totalBreakMinutes;
 
   attendance.lateMinutes = result.lateMinutes;
 
@@ -1165,12 +1167,12 @@ export const recalculateAttendance = async ({
     attendance.shiftSnapshot?.maxBreakMinutes || 0,
   );
 
-  if (maxBreakMinutes > 0 && result.totalBreakMinutes > maxBreakMinutes) {
+  if (maxBreakMinutes > 0 && attendance.totalBreakMinutes > maxBreakMinutes) {
     addAnomalyIfMissing(
       attendance,
       "EXCESSIVE_BREAK",
       `Total break duration exceeded the allowed maximum by ${
-        result.totalBreakMinutes - maxBreakMinutes
+        attendance.totalBreakMinutes - maxBreakMinutes
       } minute(s).`,
     );
   }
