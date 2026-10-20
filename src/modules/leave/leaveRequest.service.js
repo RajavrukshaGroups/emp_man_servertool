@@ -982,35 +982,81 @@ const validateNoOverlappingLeave = async ({
   companyAccessId,
   fromDate,
   toDate,
+  dateDetails,
   session,
 }) => {
-  const overlappingRequest = await LeaveRequest.findOne({
+  const overlappingRequests = await LeaveRequest.find({
     companyId,
     companyAccessId,
-
     isDeleted: false,
-
     status: {
       $in: ["PENDING", "RECOMMENDED", "APPROVED"],
     },
-
     fromDate: {
       $lte: normalizeDateOnly(toDate),
     },
-
     toDate: {
       $gte: normalizeDateOnly(fromDate),
     },
   })
     .session(session)
-    .select("_id status fromDate toDate")
+    .select("_id status fromDate toDate dateDetails")
     .lean();
 
-  if (overlappingRequest) {
-    throw new ApiError(
-      409,
-      "An active leave request already overlaps the requested dates.",
+  const requestedPortionsByDate = new Map();
+
+  const getOccupiedPortions = (dayPortion) => {
+    if (dayPortion === "FULL_DAY") {
+      return ["FIRST_HALF", "SECOND_HALF"];
+    }
+
+    if (dayPortion === "FIRST_HALF" || dayPortion === "SECOND_HALF") {
+      return [dayPortion];
+    }
+
+    return [];
+  };
+
+  for (const detail of dateDetails) {
+    if (detail.countedAsLeave !== true || Number(detail.leaveDays || 0) <= 0) {
+      continue;
+    }
+
+    requestedPortionsByDate.set(
+      getDateKey(detail.date),
+      new Set(getOccupiedPortions(detail.dayPortion)),
     );
+  }
+
+  for (const existingRequest of overlappingRequests) {
+    for (const existingDetail of existingRequest.dateDetails ?? []) {
+      if (
+        existingDetail.countedAsLeave !== true ||
+        Number(existingDetail.leaveDays || 0) <= 0
+      ) {
+        continue;
+      }
+
+      const dateKey = getDateKey(existingDetail.date);
+      const requestedPortions = requestedPortionsByDate.get(dateKey);
+
+      if (!requestedPortions) {
+        continue;
+      }
+
+      const occupiedPortions = getOccupiedPortions(existingDetail.dayPortion);
+
+      const hasConflict = occupiedPortions.some((portion) =>
+        requestedPortions.has(portion),
+      );
+
+      if (hasConflict) {
+        throw new ApiError(
+          409,
+          `An active leave request already occupies the requested leave portion on ${dateKey}.`,
+        );
+      }
+    }
   }
 };
 
@@ -1323,6 +1369,7 @@ export const previewLeaveRequest = async ({
         companyAccessId: companyAccess._id,
         fromDate,
         toDate,
+        dateDetails,
         session,
       });
     }
@@ -1605,6 +1652,7 @@ export const createLeaveRequest = async ({
           companyAccessId: companyAccess._id,
           fromDate,
           toDate,
+          dateDetails,
           session,
         });
       }

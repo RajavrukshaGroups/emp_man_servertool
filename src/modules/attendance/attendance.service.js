@@ -1333,7 +1333,10 @@ const findApprovedLeavesForAttendanceDate = async ({
 
     dateDetails: {
       $elemMatch: {
-        date,
+        date: {
+          $gte: new Date(`${date}T00:00:00.000Z`),
+          $lte: new Date(`${date}T23:59:59.999Z`),
+        },
         countedAsLeave: true,
       },
     },
@@ -1547,9 +1550,29 @@ export const getDailyAttendanceSummary = async ({
     date,
   });
 
-  const approvedLeaveByAccessId = new Map(
-    approvedLeaves.map((leave) => [String(leave.companyAccessId), leave]),
-  );
+  /**
+   * ========================================================
+   * GROUP APPROVED LEAVES BY EMPLOYEE
+   * ========================================================
+   *
+   * An employee may have multiple approved leave portions
+   * for the same date.
+   *
+   * Preserve every approved request rather than keeping
+   * only the last one.
+   */
+
+  const approvedLeavesByAccessId = new Map();
+
+  for (const leave of approvedLeaves) {
+    const accessId = String(leave.companyAccessId);
+
+    if (!approvedLeavesByAccessId.has(accessId)) {
+      approvedLeavesByAccessId.set(accessId, []);
+    }
+
+    approvedLeavesByAccessId.get(accessId).push(leave);
+  }
 
   /**
    * ========================================================
@@ -1562,22 +1585,50 @@ export const getDailyAttendanceSummary = async ({
 
     const attendance = attendanceByAccessId.get(String(access._id)) || null;
 
-    const approvedLeave =
-      approvedLeaveByAccessId.get(String(access._id)) || null;
+    const employeeApprovedLeaves =
+      approvedLeavesByAccessId.get(String(access._id)) || [];
 
-    const approvedLeaveDateDetail =
-      approvedLeave?.dateDetails?.find(
-        (detail) =>
-          new Date(detail.date).toISOString().slice(0, 10) === date &&
-          detail.countedAsLeave === true,
-      ) || null;
+    const approvedLeavesForDate = employeeApprovedLeaves.flatMap((leave) =>
+      (leave.dateDetails || [])
+        .filter(
+          (detail) =>
+            new Date(detail.date).toISOString().slice(0, 10) === date &&
+            detail.countedAsLeave === true,
+        )
+        .map((detail) => ({
+          leaveRequestId: leave._id,
+          leaveTypeId: leave.leaveTypeId,
+          dayPortion: detail.dayPortion,
+          leaveDays: detail.leaveDays,
+          paidDays: detail.paidDays,
+          unpaidDays: detail.unpaidDays,
+          allocationType: detail.allocationType,
+        })),
+    );
+
+    const totalLeaveDays = approvedLeavesForDate.reduce(
+      (sum, leave) => sum + Number(leave.leaveDays || 0),
+      0,
+    );
 
     const hasAttendanceActivity = Boolean(
       attendance?.workSessions?.some((session) => session.checkInAt),
     );
 
     const hasLeaveAttendanceConflict =
-      Boolean(approvedLeaveDateDetail) && hasAttendanceActivity;
+      approvedLeavesForDate.length > 0 && hasAttendanceActivity;
+
+    const displayStatus = attendance
+      ? attendance.attendanceStatus
+      : workDay.classification === "WEEKLY_OFF"
+        ? "WEEKLY_OFF"
+        : workDay.classification === "HOLIDAY"
+          ? "HOLIDAY"
+          : totalLeaveDays >= 1
+            ? "ON_LEAVE"
+            : totalLeaveDays > 0
+              ? "PARTIAL_LEAVE"
+              : "NOT_CHECKED_IN";
 
     const employeeUser = access.userId || null;
 
@@ -1622,19 +1673,15 @@ export const getDailyAttendanceSummary = async ({
         name: workDay.name || "",
       },
 
-      approvedLeave: approvedLeaveDateDetail
-        ? {
-            leaveRequestId: approvedLeave._id,
-            leaveTypeId: approvedLeave.leaveTypeId,
-            dayPortion: approvedLeaveDateDetail.dayPortion,
-            leaveDays: approvedLeaveDateDetail.leaveDays,
-            paidDays: approvedLeaveDateDetail.paidDays,
-            unpaidDays: approvedLeaveDateDetail.unpaidDays,
-            allocationType: approvedLeaveDateDetail.allocationType,
-          }
-        : null,
+      approvedLeave: approvedLeavesForDate[0] || null,
+
+      approvedLeaves: approvedLeavesForDate,
+
+      totalLeaveDays,
 
       hasLeaveAttendanceConflict,
+
+      displayStatus,
 
       attendanceStatus:
         attendance?.attendanceStatus ||
@@ -1642,7 +1689,7 @@ export const getDailyAttendanceSummary = async ({
           ? "WEEKLY_OFF"
           : workDay.classification === "HOLIDAY"
             ? "HOLIDAY"
-            : approvedLeave
+            : totalLeaveDays >= 1
               ? "ON_LEAVE"
               : "NOT_CHECKED_IN"),
 
