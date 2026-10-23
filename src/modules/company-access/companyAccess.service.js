@@ -691,13 +691,10 @@ export const updateCompanyAccess = async (
 ) => {
   const access = await findCompanyAccessDocument(companyId, accessId);
 
-  let nextRole = null;
-
-  if (updateData.roleId !== undefined) {
-    nextRole = await ensureRoleBelongsToCompany(updateData.roleId, companyId);
-  } else {
-    nextRole = await ensureRoleBelongsToCompany(access.roleId, companyId);
-  }
+  const nextRole = await ensureRoleBelongsToCompany(
+    updateData.roleId !== undefined ? updateData.roleId : access.roleId,
+    companyId,
+  );
 
   const nextDepartmentId =
     updateData.departmentId !== undefined

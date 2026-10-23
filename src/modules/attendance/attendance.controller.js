@@ -26,8 +26,7 @@ import { getAttendanceRequesterContext } from "./attendance.scope.js";
 const getRequestMeta = (req) => {
   const forwardedFor = req.headers["x-forwarded-for"];
 
-  let ipAddress = "";
-
+  let ipAddress;
   if (Array.isArray(forwardedFor)) {
     ipAddress = forwardedFor[0] || "";
   } else if (typeof forwardedFor === "string") {

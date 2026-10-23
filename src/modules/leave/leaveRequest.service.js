@@ -386,38 +386,6 @@ const calculateRequestedDays = (dateDetails) =>
       .toFixed(2),
   );
 
-const buildBalanceAllocations = ({ dateDetails, allocationMethod }) => {
-  if (allocationMethod !== "MONTHLY_ACCRUAL") {
-    return [];
-  }
-
-  const allocationsByPeriod = new Map();
-
-  for (const detail of dateDetails) {
-    if (detail.countedAsLeave !== true || Number(detail.leaveDays || 0) <= 0) {
-      continue;
-    }
-
-    const date = new Date(detail.date);
-
-    const periodKey = `${date.getUTCFullYear()}-${String(
-      date.getUTCMonth() + 1,
-    ).padStart(2, "0")}`;
-
-    const currentDays = allocationsByPeriod.get(periodKey) ?? 0;
-
-    allocationsByPeriod.set(
-      periodKey,
-      Number((currentDays + Number(detail.leaveDays)).toFixed(2)),
-    );
-  }
-
-  return Array.from(allocationsByPeriod.entries()).map(([periodKey, days]) => ({
-    periodKey,
-    days,
-  }));
-};
-
 /**
  * ============================================================
  * PAID / UNPAID LEAVE ALLOCATION
@@ -529,7 +497,7 @@ const calculateUsablePaidAllocations = ({
         (item) => item.periodKey === periodKey,
       );
 
-      let monthlyAvailable = 0;
+      let monthlyAvailable;
       let alreadyCommitted = 0;
 
       if (monthlyBalance) {
@@ -1075,16 +1043,10 @@ const findApplicableLeaveBalanceForPreview = async ({
   companyId,
   companyAccessId,
   leaveType,
-  leavePolicy,
   requestDate,
   session,
 }) => {
   const date = normalizeDateOnly(requestDate);
-
-  const { leaveYearStart, leaveYearEnd } = resolveLeaveYear({
-    requestDate: date,
-    leavePolicy,
-  });
 
   return LeaveBalance.findOne({
     companyId,
@@ -1276,7 +1238,7 @@ export const previewLeaveRequest = async ({
     const fromDate = normalizeDateOnly(data.fromDate);
     const toDate = normalizeDateOnly(data.toDate);
 
-    const { employee, companyAccess } = await resolveRequesterEmployeeContext({
+    const { companyAccess } = await resolveRequesterEmployeeContext({
       companyId,
       requesterContext,
       session,
@@ -1377,8 +1339,8 @@ export const previewLeaveRequest = async ({
     let leaveBalance = null;
     let balanceAllocations = [];
 
-    let paidDays = 0;
-    let unpaidDays = 0;
+    let paidDays;
+    let unpaidDays;
 
     let unpaidLeaveType = null;
 
@@ -1662,8 +1624,8 @@ export const createLeaveRequest = async ({
 
       let balanceAllocations = [];
 
-      let paidDays = 0;
-      let unpaidDays = 0;
+      let paidDays;
+      let unpaidDays;
 
       let unpaidLeaveType = null;
 

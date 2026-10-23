@@ -27,7 +27,7 @@ const handleInvalidObjectIdError = (error) => {
   return new ApiError(400, `Invalid value provided for ${error.path}.`);
 };
 
-export const errorHandler = (error, req, res, next) => {
+export const errorHandler = (error, req, res, _next) => {
   let normalizedError = error;
 
   if (error instanceof mongoose.Error.ValidationError) {

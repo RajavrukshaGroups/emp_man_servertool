@@ -91,14 +91,6 @@ const regularizationPopulate = [
  * ============================================================
  */
 
-const idsEqual = (first, second) => {
-  if (!first || !second) {
-    return false;
-  }
-
-  return String(first) === String(second);
-};
-
 const normalizeText = (value = "") => String(value || "").trim();
 
 const calculateMinutes = (start, end) => {
@@ -1735,25 +1727,15 @@ export const approveAttendanceRegularization = async ({
 
       regularization.updatedBy = requesterContext.userId || null;
 
-      try {
-        await applyApprovedRegularization({
-          regularization,
-          attendance,
-          company,
-          requesterContext,
-          session,
-        });
-      } catch (error) {
-        /**
-         * Because approval + application are inside one
-         * MongoDB transaction, throwing here rolls back the
-         * APPROVED state as well.
-         *
-         * We intentionally do not persist FAILED inside the
-         * same rolled-back transaction.
-         */
-        throw error;
-      }
+      // An application error propagates to withTransaction,
+      // rolling back the approval and attendance changes.
+      await applyApprovedRegularization({
+        regularization,
+        attendance,
+        company,
+        requesterContext,
+        session,
+      });
 
       await regularization.save({
         session,

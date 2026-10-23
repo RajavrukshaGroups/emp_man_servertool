@@ -1,5 +1,3 @@
-import mongoose from "mongoose";
-
 import { ApiError } from "../../utils/ApiError.js";
 
 import Company from "../companies/company.model.js";

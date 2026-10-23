@@ -103,14 +103,6 @@ const populateFieldVisit = (query) =>
  * ============================================================
  */
 
-const toObjectIdString = (value) => {
-  if (!value) {
-    return "";
-  }
-
-  return String(value?._id ?? value);
-};
-
 const calculateDurationMinutes = (startedAt, endedAt) => {
   if (!startedAt || !endedAt) {
     return 0;

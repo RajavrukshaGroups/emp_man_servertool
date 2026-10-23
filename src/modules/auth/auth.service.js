@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import { ApiError } from "../../utils/ApiError.js";
 
 import User from "../users/user.model.js";
-import Role from "../roles/role.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 
 import RefreshToken from "./refreshToken.model.js";
@@ -639,23 +638,6 @@ export const login = async ({
 
     refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
   };
-
-  user.lastLoginAt = new Date();
-  await user.save({
-    validateBeforeSave: false,
-  });
-
-  // return {
-  //   data: buildAuthenticationResponse({
-  //     user,
-  //     companyAccess,
-  //     accessToken: tokens.accessToken,
-  //   }),
-
-  //   refreshToken: tokens.refreshToken,
-
-  //   refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
-  // };
 };
 
 /**

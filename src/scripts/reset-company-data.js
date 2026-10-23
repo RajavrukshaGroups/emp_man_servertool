@@ -108,8 +108,7 @@ async function resetCompanyData() {
    * ==========================================================
    */
 
-  let companies = [];
-
+  let companies;
   if (requestedCompanyId) {
     if (!mongoose.isValidObjectId(requestedCompanyId)) {
       throw new Error(`Invalid --company ObjectId: ${requestedCompanyId}`);

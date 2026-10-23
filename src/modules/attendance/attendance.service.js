@@ -30,7 +30,6 @@ import {
   hasOpenWorkSession,
   isLocationAccuracyAcceptable,
   isWithinGeofence,
-  shouldEnforceGeofence,
   validateLocationCapturedAt,
 } from "./attendance.utils.js";
 
@@ -112,14 +111,6 @@ const attendancePopulate = [
  * GENERAL HELPERS
  * ============================================================
  */
-
-const idsEqual = (first, second) => {
-  if (!first || !second) {
-    return false;
-  }
-
-  return String(first) === String(second);
-};
 
 const normalizeIpAddress = (ipAddress = "") =>
   String(ipAddress || "")
@@ -349,6 +340,173 @@ const resolveAssignedShift = async ({
   }
 
   return shift;
+};
+
+/**
+ * Determine whether attendance overlaps an approved leave portion.
+ *
+ * Half-day boundaries use the midpoint of the scheduled shift.
+ * Shift times are interpreted in the company's timezone.
+ *
+ * Returns:
+ * - true: confirmed conflict
+ * - false: no confirmed conflict
+ * - null: cannot determine safely
+ */
+const detectLeaveAttendanceConflict = ({
+  attendance,
+  approvedLeaves = [],
+  timezone = "Asia/Kolkata",
+}) => {
+  if (!attendance?.workSessions?.length || !approvedLeaves.length) {
+    return false;
+  }
+
+  const sessions = attendance.workSessions.filter(
+    (session) => session.checkInAt,
+  );
+
+  if (!sessions.length) {
+    return false;
+  }
+
+  if (approvedLeaves.some((leave) => leave.dayPortion === "FULL_DAY")) {
+    return true;
+  }
+
+  const shift = attendance.shiftSnapshot;
+
+  if (!shift?.startTime || !shift?.endTime) {
+    return null;
+  }
+
+  const parseMinutes = (time) => {
+    if (!/^\d{2}:\d{2}$/.test(time)) return null;
+
+    const [hours, minutes] = time.split(":").map(Number);
+
+    if (hours > 23 || minutes > 59) return null;
+
+    return hours * 60 + minutes;
+  };
+
+  const startMinutes = parseMinutes(shift.startTime);
+  let endMinutes = parseMinutes(shift.endTime);
+
+  if (startMinutes === null || endMinutes === null) {
+    return null;
+  }
+
+  if (shift.isOvernight) {
+    if (endMinutes <= startMinutes) {
+      endMinutes += 1440;
+    }
+  } else if (endMinutes <= startMinutes) {
+    return null;
+  }
+
+  const midpointMinutes = (startMinutes + endMinutes) / 2;
+
+  const getLocalMinutes = (dateValue) => {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) return null;
+
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+
+    const values = Object.fromEntries(
+      parts.map((part) => [part.type, part.value]),
+    );
+
+    return {
+      date: `${values.year}-${values.month}-${values.day}`,
+      minutes: Number(values.hour) * 60 + Number(values.minute),
+    };
+  };
+
+  const attendanceDate = attendance.attendanceDate;
+
+  if (!attendanceDate) {
+    return null;
+  }
+
+  const getRelativeMinutes = (value) => {
+    const local = getLocalMinutes(value);
+
+    if (!local) return null;
+
+    const dayDifference = Math.round(
+      (Date.parse(`${local.date}T00:00:00Z`) -
+        Date.parse(`${attendanceDate}T00:00:00Z`)) /
+        86400000,
+    );
+
+    if (!Number.isFinite(dayDifference)) return null;
+
+    return local.minutes + dayDifference * 1440;
+  };
+
+  let unresolved = false;
+
+  for (const leave of approvedLeaves) {
+    const portion = leave.dayPortion;
+
+    if (portion === "FULL_DAY") {
+      return true;
+    }
+
+    let leaveStart;
+    let leaveEnd;
+
+    if (portion === "FIRST_HALF") {
+      leaveStart = startMinutes;
+      leaveEnd = midpointMinutes;
+    } else if (portion === "SECOND_HALF") {
+      leaveStart = midpointMinutes;
+      leaveEnd = endMinutes;
+    } else {
+      unresolved = true;
+      continue;
+    }
+
+    for (const session of sessions) {
+      const sessionStart = getRelativeMinutes(session.checkInAt);
+
+      if (sessionStart === null) {
+        unresolved = true;
+        continue;
+      }
+      if (!session.checkOutAt) {
+        if (sessionStart >= leaveStart && sessionStart < leaveEnd) {
+          return true;
+        }
+
+        unresolved = true;
+        continue;
+      }
+
+      const sessionEnd = getRelativeMinutes(session.checkOutAt);
+
+      if (sessionEnd === null || sessionEnd < sessionStart) {
+        unresolved = true;
+        continue;
+      }
+
+      if (sessionStart < leaveEnd && sessionEnd > leaveStart) {
+        return true;
+      }
+    }
+  }
+
+  return unresolved ? null : false;
 };
 
 const createShiftSnapshot = (shift) => ({
@@ -650,7 +808,6 @@ const resolveAttendanceLocationPolicy = ({ companyAccess, action }) => {
 
 const buildAttendanceLocationEvidence = async ({
   companyId,
-  attendanceMode,
   policy,
   locationInput,
   attendanceLocationId = null,
@@ -844,34 +1001,6 @@ const buildAttendanceLocationEvidence = async ({
  *
  * while the logical attendanceDate remains 2026-08-31.
  */
-
-const findOpenAttendance = async ({
-  companyId,
-  companyAccessId,
-  session = null,
-}) => {
-  let query = Attendance.findOne({
-    companyId,
-    companyAccessId,
-    isDeleted: false,
-
-    workSessions: {
-      $elemMatch: {
-        status: "OPEN",
-        checkOutAt: null,
-      },
-    },
-  }).sort({
-    attendanceDate: -1,
-    createdAt: -1,
-  });
-
-  if (session) {
-    query = query.session(session);
-  }
-
-  return query;
-};
 
 const findCurrentDayOpenAttendance = async ({
   companyId,
@@ -1377,7 +1506,7 @@ export const getDailyAttendanceSummary = async ({
   query = {},
   requesterContext,
 }) => {
-  await resolveAttendanceCompany(companyId);
+  const company = await resolveAttendanceCompany(companyId);
 
   const { date, departmentId, teamId, shiftId, attendanceStatus, search } =
     query;
@@ -1610,13 +1739,11 @@ export const getDailyAttendanceSummary = async ({
       (sum, leave) => sum + Number(leave.leaveDays || 0),
       0,
     );
-
-    const hasAttendanceActivity = Boolean(
-      attendance?.workSessions?.some((session) => session.checkInAt),
-    );
-
-    const hasLeaveAttendanceConflict =
-      approvedLeavesForDate.length > 0 && hasAttendanceActivity;
+    const hasLeaveAttendanceConflict = detectLeaveAttendanceConflict({
+      attendance,
+      approvedLeaves: approvedLeavesForDate,
+      timezone: company.timezone || "Asia/Kolkata",
+    });
 
     const displayStatus = attendance
       ? attendance.attendanceStatus
@@ -2164,12 +2291,11 @@ export const getMyAttendanceCalendar = async ({
       0,
     );
 
-    const hasAttendanceActivity = Boolean(
-      attendance?.workSessions?.some((session) => session.checkInAt),
-    );
-
-    const hasLeaveAttendanceConflict =
-      approvedLeavesForDate.length > 0 && hasAttendanceActivity;
+    const hasLeaveAttendanceConflict = detectLeaveAttendanceConflict({
+      attendance,
+      approvedLeaves: approvedLeavesForDate,
+      timezone: company.timezone || "Asia/Kolkata",
+    });
 
     let displayStatus;
 
@@ -2266,7 +2392,7 @@ export const checkInAttendance = async ({
 
       const attendanceDate = getAttendanceDateInTimezone(currentTime, timezone);
 
-      const workDay = await resolveWorkDay({
+      await resolveWorkDay({
         companyId,
         date: attendanceDate,
         session,

@@ -1424,3 +1424,36 @@ export const getDailyAttendanceSummarySchema = z.object({
 
   body: emptyBodySchema,
 });
+
+/**
+ * ============================================================
+ * MONTHLY ATTENDANCE REPORT
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/reports/monthly
+ *
+ * Example:
+ * ?month=2026-10&page=1&limit=20
+ */
+
+export const getMonthlyAttendanceReportSchema = z.object({
+  params: attendanceCompanyParamsSchema,
+
+  query: z
+    .object({
+      month: z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Month must use YYYY-MM format."),
+
+      departmentId: objectIdSchema.optional(),
+
+      teamId: objectIdSchema.optional(),
+
+      search: z.string().trim().max(100).optional(),
+
+      ...paginationQuerySchema,
+    })
+    .strict(),
+
+  body: emptyBodySchema,
+});

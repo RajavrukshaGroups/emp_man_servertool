@@ -298,7 +298,6 @@ export const createCompanyAdministrator = async (
   const session = await mongoose.startSession();
 
   try {
-    let createdUserId;
     let createdAccessId;
 
     await session.withTransaction(async () => {
@@ -421,9 +420,6 @@ export const createCompanyAdministrator = async (
           session,
         },
       );
-
-      createdUserId = createdUser._id;
-
       /**
        * This initial administrator is always:
        *

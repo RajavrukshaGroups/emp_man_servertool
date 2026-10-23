@@ -30,6 +30,7 @@ import {
   getAttendanceLocationSchema,
   updateAttendanceLocationSchema,
   getDailyAttendanceSummarySchema,
+  getMonthlyAttendanceReportSchema,
 
   // FIELD VISIT
   startFieldVisitSchema,
@@ -62,6 +63,8 @@ import {
   getAttendance,
   getDailySummary,
 } from "./attendance.controller.js";
+
+import { getMonthlyReport } from "./attendanceReport.controller.js";
 
 import {
   createPolicy,
@@ -560,18 +563,30 @@ router.get(
  * /companies/:companyId/attendance/daily-summary
  */
 
-// router.get(
-//   "/daily-summary",
-//   authorize(PERMISSIONS.ATTENDANCE_READ),
-//   validate(getDailyAttendanceSummarySchema),
-//   getDailySummary,
-// );
-
 router.get(
   "/daily-summary",
   authorize(PERMISSIONS.ATTENDANCE_SUMMARY_READ),
   validate(getDailyAttendanceSummarySchema),
   getDailySummary,
+);
+
+/**
+ * ============================================================
+ * MONTHLY ATTENDANCE REPORT
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/reports/monthly
+ *
+ * Company isolation: enforceCompanyContext
+ * Employee visibility: attendance.scope.js
+ * Permission: attendance.summary_read
+ */
+
+router.get(
+  "/reports/monthly",
+  authorize(PERMISSIONS.ATTENDANCE_SUMMARY_READ),
+  validate(getMonthlyAttendanceReportSchema),
+  getMonthlyReport,
 );
 
 /**

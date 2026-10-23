@@ -6,6 +6,7 @@ import LeavePolicy from "./leavePolicy.model.js";
 import Employee from "../employees/employee.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import User from "../users/user.model.js";
+import Company from "../companies/company.model.js";
 
 import { ApiError } from "../../utils/ApiError.js";
 
@@ -1093,6 +1094,7 @@ export const getLeaveBalanceSummary = async ({
   companyId,
   query = {},
   scopeFilter = {},
+  asOfDate = new Date(),
 }) => {
   const {
     employeeId,
@@ -1149,10 +1151,49 @@ export const getLeaveBalanceSummary = async ({
     }
   }
 
+  const company = await Company.findById(companyId).select("timezone").lean();
+
+  if (!company) {
+    throw new ApiError(404, "Company not found.");
+  }
+
+  const companyTimezone = company.timezone || "Asia/Kolkata";
+
+  const dateParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: companyTimezone,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(asOfDate);
+
+  const year = dateParts.find((part) => part.type === "year")?.value;
+  const month = dateParts.find((part) => part.type === "month")?.value;
+
+  const currentPeriodKey = `${year}-${month}`;
+
   // keep your existing aggregation below unchanged
   const [summary] = await LeaveBalance.aggregate([
     {
       $match: filter,
+    },
+    {
+      $lookup: {
+        from: LeaveType.collection.name,
+        localField: "leaveTypeId",
+        foreignField: "_id",
+        as: "summaryLeaveType",
+      },
+    },
+    {
+      $set: {
+        summaryAllowMonthlyAccumulation: {
+          $eq: [
+            {
+              $arrayElemAt: ["$summaryLeaveType.allowMonthlyAccumulation", 0],
+            },
+            true,
+          ],
+        },
+      },
     },
     {
       $group: {
@@ -1183,16 +1224,42 @@ export const getLeaveBalanceSummary = async ({
                         },
                         as: "month",
                         cond: {
-                          $or: [
+                          $and: [
+                            // Only count months that were actually accrued.
                             {
-                              $eq: ["$$month.isAccrued", true],
-                            },
-                            {
-                              $gt: [
+                              $or: [
                                 {
-                                  $ifNull: ["$$month.creditedDays", 0],
+                                  $eq: ["$$month.isAccrued", true],
                                 },
-                                0,
+                                {
+                                  $gt: [
+                                    {
+                                      $ifNull: ["$$month.creditedDays", 0],
+                                    },
+                                    0,
+                                  ],
+                                },
+                              ],
+                            },
+
+                            // Never count future monthly buckets.
+                            {
+                              $lte: ["$$month.periodKey", currentPeriodKey],
+                            },
+
+                            // When accumulation is disabled, only the
+                            // current month's entitlement is available.
+                            {
+                              $or: [
+                                {
+                                  $eq: [
+                                    "$summaryAllowMonthlyAccumulation",
+                                    true,
+                                  ],
+                                },
+                                {
+                                  $eq: ["$$month.periodKey", currentPeriodKey],
+                                },
                               ],
                             },
                           ],
