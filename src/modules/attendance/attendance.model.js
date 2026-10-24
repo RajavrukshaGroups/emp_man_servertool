@@ -453,6 +453,37 @@ const attendanceSchema = new mongoose.Schema(
         required: true,
       },
 
+      earlyCheckInWindowMinutes: {
+        type: Number,
+        default: 15,
+        min: 0,
+        max: 120,
+      },
+
+      /**
+       * Whether re-check-in is permitted after
+       * the scheduled shift ends.
+       */
+      allowPostShiftCheckIn: {
+        type: Boolean,
+        default: false,
+      },
+
+      /**
+       * Maximum permitted post-shift re-check-in window.
+       * Applies only when allowPostShiftCheckIn is true.
+       */
+      postShiftCheckInWindowMinutes: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 240,
+        validate: {
+          validator: Number.isInteger,
+          message: "Post-shift check-in window must be a whole number.",
+        },
+      },
+
       lateGraceMinutes: {
         type: Number,
         default: 0,

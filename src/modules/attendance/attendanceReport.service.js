@@ -4,6 +4,7 @@ import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Employee from "../employees/employee.model.js";
 import LeaveRequest from "../leave/leaveRequest.model.js";
+import User from "../users/user.model.js";
 
 import Attendance from "./attendance.model.js";
 
@@ -141,9 +142,25 @@ const resolveMonthlyReportEmployees = async ({
   if (search?.trim()) {
     const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+    const matchingUsers = await User.find({
+      isDeleted: false,
+      $or: [
+        { firstName: { $regex: escapedSearch, $options: "i" } },
+        { middleName: { $regex: escapedSearch, $options: "i" } },
+        { lastName: { $regex: escapedSearch, $options: "i" } },
+        { displayName: { $regex: escapedSearch, $options: "i" } },
+        { email: { $regex: escapedSearch, $options: "i" } },
+      ],
+    })
+      .select("_id")
+      .lean();
+
+    const matchingUserIds = matchingUsers.map((user) => user._id);
+
     additionalFilter.$or = [
       { employeeCode: { $regex: escapedSearch, $options: "i" } },
       { designation: { $regex: escapedSearch, $options: "i" } },
+      { userId: { $in: matchingUserIds } },
     ];
   }
 

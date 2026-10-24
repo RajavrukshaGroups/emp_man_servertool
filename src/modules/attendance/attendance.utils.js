@@ -719,13 +719,22 @@ export const calculateLateMinutes = ({
     };
   }
 
-  const difference = calculateMinutesBetween(expectedStart, checkIn);
+  const graceMilliseconds = Math.max(0, Number(graceMinutes || 0)) * 60_000;
 
-  const lateMinutes = Math.max(0, difference - Number(graceMinutes || 0));
+  const lateMilliseconds = Math.max(
+    0,
+    checkIn.getTime() - (expectedStart.getTime() + graceMilliseconds),
+  );
+
+  const isLate = lateMilliseconds > 0;
+
+  const lateMinutes = isLate
+    ? Math.max(1, Math.ceil(lateMilliseconds / 60_000))
+    : 0;
 
   return {
     lateMinutes,
-    isLate: lateMinutes > 0,
+    isLate,
   };
 };
 
@@ -1330,4 +1339,75 @@ export const validateLocationCapturedAt = ({
     reason: null,
     capturedAt: parsedCapturedAt,
   };
+};
+
+export const resolveShiftAttendanceDate = ({
+  currentTime,
+  shift,
+  timezone,
+}) => {
+  const localDate = getAttendanceDateInTimezone(currentTime, timezone);
+
+  const previousDateString = addDaysToDateString(localDate, -1);
+  const nextDateString = addDaysToDateString(localDate, 1);
+
+  const earlyWindowMinutes = Number(shift.earlyCheckInWindowMinutes ?? 15);
+
+  const postShiftWindowMinutes = shift.allowPostShiftCheckIn
+    ? Number(shift.postShiftCheckInWindowMinutes ?? 0)
+    : 0;
+
+  /**
+   * Check whether current time belongs to a shift
+   * that started on the previous calendar day.
+   */
+  if (shift.isOvernight) {
+    const { shiftStart, shiftEnd } = getShiftBoundaries({
+      attendanceDate: previousDateString,
+      startTime: shift.startTime,
+      endTime: shift.endTime,
+      isOvernight: true,
+      timezone,
+    });
+
+    const earliestCheckIn = new Date(
+      shiftStart.getTime() - earlyWindowMinutes * 60_000,
+    );
+
+    const latestPostShiftCheckIn = new Date(
+      shiftEnd.getTime() + postShiftWindowMinutes * 60_000,
+    );
+
+    if (
+      currentTime >= earliestCheckIn &&
+      currentTime < latestPostShiftCheckIn
+    ) {
+      return previousDateString;
+    }
+  }
+
+  /**
+   * Handle shifts beginning shortly after midnight.
+   *
+   * Example:
+   * Shift starts tomorrow at 00:10.
+   * Early check-in begins today at 23:55.
+   */
+  const { shiftStart: nextShiftStart } = getShiftBoundaries({
+    attendanceDate: nextDateString,
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    isOvernight: shift.isOvernight,
+    timezone,
+  });
+
+  const nextShiftEarliestCheckIn = new Date(
+    nextShiftStart.getTime() - earlyWindowMinutes * 60_000,
+  );
+
+  if (currentTime >= nextShiftEarliestCheckIn && currentTime < nextShiftStart) {
+    return nextDateString;
+  }
+
+  return localDate;
 };

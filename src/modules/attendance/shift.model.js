@@ -100,6 +100,65 @@ const shiftSchema = new mongoose.Schema(
     },
 
     /**
+     * Maximum number of minutes before the scheduled shift start
+     * when an employee is permitted to check in.
+     *
+     * Example:
+     * Shift starts at 09:30
+     * earlyCheckInWindowMinutes = 15
+     *
+     * Earliest permitted check-in: 09:15
+     *
+     * This is independent of lateGraceMinutes and
+     * earlyCheckoutGraceMinutes.
+     */
+    earlyCheckInWindowMinutes: {
+      type: Number,
+      default: 15,
+      min: [0, "Early check-in window cannot be negative."],
+      max: [120, "Early check-in window cannot exceed 120 minutes."],
+      validate: {
+        validator: Number.isInteger,
+        message: "Early check-in window must be a whole number of minutes.",
+      },
+    },
+
+    /**
+     * Whether employees may re-check-in after their
+     * scheduled shift has ended.
+     *
+     * Applies only to an existing attendance record
+     * when the attendance policy permits re-check-in.
+     */
+    allowPostShiftCheckIn: {
+      type: Boolean,
+      default: false,
+    },
+
+    /**
+     * Number of minutes after scheduled shift end
+     * during which re-check-in is permitted.
+     *
+     * Example:
+     * Shift ends at 18:30
+     * allowPostShiftCheckIn = true
+     * postShiftCheckInWindowMinutes = 60
+     *
+     * Re-check-in is permitted until 19:30.
+     */
+    postShiftCheckInWindowMinutes: {
+      type: Number,
+      default: 0,
+      min: [0, "Post-shift check-in window cannot be negative."],
+      max: [240, "Post-shift check-in window cannot exceed 240 minutes."],
+      validate: {
+        validator: Number.isInteger,
+        message:
+          "Post-shift check-in window must be a whole number of minutes.",
+      },
+    },
+
+    /**
      * Grace period after shift start before an employee
      * is considered late.
      */

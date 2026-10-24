@@ -25,12 +25,16 @@ import {
   calculateTotalBreakMinutes,
   getActiveBreak,
   getAttendanceDateInTimezone,
+  getShiftBoundaries,
   getOpenWorkSession,
   hasActiveBreak,
   hasOpenWorkSession,
   isLocationAccuracyAcceptable,
   isWithinGeofence,
   validateLocationCapturedAt,
+  calculateLateMinutes,
+  resolveShiftAttendanceDate,
+  addDaysToDateString,
 } from "./attendance.utils.js";
 
 import {
@@ -75,7 +79,7 @@ const attendancePopulate = [
       {
         path: "shiftId",
         select:
-          "name code startTime endTime isOvernight fullDayMinutes halfDayMinutes lateGraceMinutes earlyCheckoutGraceMinutes standardBreakMinutes maxBreakMinutes allowMultipleBreaks status",
+          "name code startTime endTime isOvernight fullDayMinutes halfDayMinutes earlyCheckInWindowMinutes lateGraceMinutes earlyCheckoutGraceMinutes standardBreakMinutes maxBreakMinutes allowMultipleBreaks status",
       },
       {
         path: "attendanceLocationId",
@@ -87,7 +91,7 @@ const attendancePopulate = [
   {
     path: "shiftId",
     select:
-      "name code startTime endTime isOvernight fullDayMinutes halfDayMinutes lateGraceMinutes earlyCheckoutGraceMinutes standardBreakMinutes maxBreakMinutes allowMultipleBreaks status",
+      "name code startTime endTime isOvernight fullDayMinutes halfDayMinutes earlyCheckInWindowMinutes lateGraceMinutes earlyCheckoutGraceMinutes standardBreakMinutes maxBreakMinutes allowMultipleBreaks status",
   },
   {
     path: "attendancePolicyId",
@@ -509,6 +513,70 @@ const detectLeaveAttendanceConflict = ({
   return unresolved ? null : false;
 };
 
+/**
+ * ============================================================
+ * CHECK-IN WINDOW VALIDATION HELPER
+ * ============================================================
+ *
+ * First check-in:
+ *   Early window <= current time < shift end
+ *
+ * Re-check-in:
+ *   Early window <= current time < shift end
+ *   OR within the configured post-shift extension.
+ *
+ * Uses the attendance's saved shift snapshot for re-check-in.
+ */
+const isWithinShiftCheckInWindow = ({
+  currentTime,
+  attendanceDate,
+  shift,
+  timezone,
+  isReCheckIn = false,
+}) => {
+  if (!shift?.startTime || !shift?.endTime) {
+    return false;
+  }
+
+  const { shiftStart, shiftEnd } = getShiftBoundaries({
+    attendanceDate,
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    isOvernight: shift.isOvernight,
+    timezone,
+  });
+
+  const earlyWindowMinutes = Number(shift.earlyCheckInWindowMinutes ?? 15);
+
+  const earliestCheckIn = new Date(
+    shiftStart.getTime() - earlyWindowMinutes * 60_000,
+  );
+
+  if (currentTime < earliestCheckIn) {
+    return false;
+  }
+
+  if (currentTime < shiftEnd) {
+    return true;
+  }
+
+  if (!isReCheckIn || shift.allowPostShiftCheckIn !== true) {
+    return false;
+  }
+
+  const postShiftMinutes = Number(shift.postShiftCheckInWindowMinutes ?? 0);
+
+  if (postShiftMinutes <= 0) {
+    return false;
+  }
+
+  const latestCheckIn = new Date(
+    shiftEnd.getTime() + postShiftMinutes * 60_000,
+  );
+
+  return currentTime < latestCheckIn;
+};
+
 const createShiftSnapshot = (shift) => ({
   name: shift.name,
   code: shift.code,
@@ -521,6 +589,12 @@ const createShiftSnapshot = (shift) => ({
   fullDayMinutes: shift.fullDayMinutes,
 
   halfDayMinutes: shift.halfDayMinutes,
+
+  earlyCheckInWindowMinutes: shift.earlyCheckInWindowMinutes ?? 15,
+
+  allowPostShiftCheckIn: shift.allowPostShiftCheckIn ?? false,
+
+  postShiftCheckInWindowMinutes: shift.postShiftCheckInWindowMinutes ?? 0,
 
   lateGraceMinutes: shift.lateGraceMinutes || 0,
 
@@ -1086,7 +1160,11 @@ const findActionableOpenAttendance = async ({
    * check-in: 2026-09-16 22:00
    * checkout: 2026-09-17 06:00
    */
-  const previousAttendance = openAttendances[0];
+  const previousAttendance = openAttendances.find(
+    (attendance) =>
+      attendance.attendanceDate ===
+      addDaysToDateString(currentAttendanceDate, -1),
+  );
 
   if (!previousAttendance?.shiftSnapshot?.isOvernight) {
     return null;
@@ -2390,14 +2468,6 @@ export const checkInAttendance = async ({
 
       const timezone = company.timezone || "Asia/Kolkata";
 
-      const attendanceDate = getAttendanceDateInTimezone(currentTime, timezone);
-
-      await resolveWorkDay({
-        companyId,
-        date: attendanceDate,
-        session,
-      });
-
       const policy = await resolveActiveAttendancePolicy({
         companyId,
         currentTime,
@@ -2410,6 +2480,132 @@ export const checkInAttendance = async ({
         currentTime,
         session,
       });
+
+      /**
+       * ==================================================
+       * RESOLVE LOGICAL ATTENDANCE DATE
+       * ==================================================
+       */
+
+      let attendanceDate = resolveShiftAttendanceDate({
+        currentTime,
+        shift,
+        timezone,
+      });
+
+      const localDate = getAttendanceDateInTimezone(currentTime, timezone);
+
+      const previousDate = addDaysToDateString(localDate, -1);
+
+      /**
+       * Check for an existing overnight attendance
+       * belonging to the previous calendar date.
+       */
+      const previousOvernightAttendance = await Attendance.findOne({
+        companyId,
+        companyAccessId: companyAccess._id,
+        attendanceDate: previousDate,
+        isDeleted: false,
+        "shiftSnapshot.isOvernight": true,
+      }).session(session);
+
+      if (previousOvernightAttendance) {
+        const savedShift = previousOvernightAttendance.shiftSnapshot;
+
+        if (savedShift?.startTime && savedShift?.endTime) {
+          const { shiftEnd } = getShiftBoundaries({
+            attendanceDate: previousOvernightAttendance.attendanceDate,
+            startTime: savedShift.startTime,
+            endTime: savedShift.endTime,
+            isOvernight: savedShift.isOvernight,
+            timezone,
+          });
+
+          const postShiftMinutes = savedShift.allowPostShiftCheckIn
+            ? Number(savedShift.postShiftCheckInWindowMinutes ?? 0)
+            : 0;
+
+          const latestAllowedTime = new Date(
+            shiftEnd.getTime() + postShiftMinutes * 60_000,
+          );
+
+          /**
+           * Existing overnight attendance takes priority
+           * while its shift or extension is still active.
+           */
+          const todayFirstCheckInAllowed = isWithinShiftCheckInWindow({
+            currentTime,
+            attendanceDate: localDate,
+            shift,
+            timezone,
+            isReCheckIn: false,
+          });
+
+          const previousSessionStillOpen = hasOpenWorkSession(
+            previousOvernightAttendance,
+          );
+
+          if (
+            currentTime < latestAllowedTime &&
+            previousOvernightAttendance.workSessions?.length > 0 &&
+            !todayFirstCheckInAllowed
+          ) {
+            attendanceDate = previousOvernightAttendance.attendanceDate;
+          }
+        }
+      }
+
+      const workDay = await resolveWorkDay({
+        companyId,
+        date: attendanceDate,
+        session,
+      });
+
+      const existingAttendance = await Attendance.exists({
+        companyId,
+        companyAccessId: companyAccess._id,
+        attendanceDate,
+        isDeleted: false,
+      }).session(session);
+
+      if (!existingAttendance) {
+        const { shiftStart, shiftEnd } = getShiftBoundaries({
+          attendanceDate,
+          startTime: shift.startTime,
+          endTime: shift.endTime,
+          isOvernight: shift.isOvernight,
+          timezone,
+        });
+
+        const earlyWindowMinutes = Number(
+          shift.earlyCheckInWindowMinutes ?? 15,
+        );
+
+        const earliestCheckIn = new Date(
+          shiftStart.getTime() - earlyWindowMinutes * 60_000,
+        );
+
+        if (currentTime < earliestCheckIn) {
+          throw new ApiError(
+            400,
+            `Check-in is allowed only ${earlyWindowMinutes} minute(s) before your scheduled shift starts.`,
+          );
+        }
+
+        /**
+         * A new attendance record cannot be created
+         * after the scheduled shift has ended.
+         *
+         * Post-shift extension applies only to
+         * eligible re-check-ins.
+         */
+        if (currentTime >= shiftEnd) {
+          throw new ApiError(
+            400,
+            "Your scheduled shift has already ended. New check-in is not permitted.",
+          );
+        }
+      }
 
       /**
        * Check for an older forgotten/open attendance.
@@ -2480,12 +2676,29 @@ export const checkInAttendance = async ({
         );
       }
 
+      const existingAttendanceForPolicy = await Attendance.findOne({
+        companyId,
+        companyAccessId: companyAccess._id,
+        attendanceDate,
+        isDeleted: false,
+      })
+        .select("attendancePolicyId")
+        .session(session);
+
+      const checkInPolicy = existingAttendanceForPolicy
+        ? await resolveAttendancePolicyById({
+            companyId,
+            policyId: existingAttendanceForPolicy.attendancePolicyId,
+            session,
+          })
+        : policy;
+
       const locationEvidence = await buildAttendanceLocationEvidence({
         companyId,
 
         attendanceMode,
 
-        policy,
+        policy: checkInPolicy,
 
         locationInput: data.location || null,
 
@@ -2518,6 +2731,25 @@ export const checkInAttendance = async ({
        * ====================================================
        */
       if (!attendance) {
+        const { shiftStart } = getShiftBoundaries({
+          attendanceDate,
+          startTime: shift.startTime,
+          endTime: shift.endTime,
+          isOvernight: shift.isOvernight,
+          timezone,
+        });
+
+        const { lateMinutes, isLate } = workDay.isWorkingDay
+          ? calculateLateMinutes({
+              firstCheckInAt: currentTime,
+              shiftStart,
+              graceMinutes: shift.lateGraceMinutes ?? 0,
+            })
+          : {
+              lateMinutes: 0,
+              isLate: false,
+            };
+
         const createdRecords = await Attendance.create(
           [
             {
@@ -2570,11 +2802,11 @@ export const checkInAttendance = async ({
 
               totalBreakMinutes: 0,
 
-              lateMinutes: 0,
+              lateMinutes,
 
               earlyCheckoutMinutes: 0,
 
-              isLate: false,
+              isLate,
 
               isEarlyCheckout: false,
 
@@ -2619,7 +2851,13 @@ export const checkInAttendance = async ({
           );
         }
 
-        if (!policy.allowReCheckInSameDay) {
+        const attendancePolicy = await resolveAttendancePolicyById({
+          companyId,
+          policyId: attendance.attendancePolicyId,
+          session,
+        });
+
+        if (!attendancePolicy.allowReCheckInSameDay) {
           throw new ApiError(
             409,
             "Re-check-in on the same day is not allowed by the attendance policy.",
@@ -2627,7 +2865,7 @@ export const checkInAttendance = async ({
         }
 
         if (
-          !policy.allowMultipleWorkSessions &&
+          !attendancePolicy.allowMultipleWorkSessions &&
           attendance.workSessions.length > 0
         ) {
           throw new ApiError(
@@ -2645,6 +2883,74 @@ export const checkInAttendance = async ({
             409,
             "An active break must be completed before starting another work session.",
           );
+        }
+
+        /**
+         * ==================================================
+         * RE-CHECK-IN SHIFT TIME VALIDATION
+         * ==================================================
+         *
+         * Use the shift snapshot saved when attendance
+         * was first created.
+         *
+         * This prevents later shift configuration changes
+         * from altering the attendance's original timing.
+         */
+
+        const attendanceShift = attendance.shiftSnapshot;
+
+        if (!attendanceShift?.startTime || !attendanceShift?.endTime) {
+          throw new ApiError(
+            409,
+            "Attendance shift information is unavailable. Please contact the administrator.",
+          );
+        }
+
+        const { shiftStart, shiftEnd } = getShiftBoundaries({
+          attendanceDate: attendance.attendanceDate,
+          startTime: attendanceShift.startTime,
+          endTime: attendanceShift.endTime,
+          isOvernight: attendanceShift.isOvernight,
+          timezone,
+        });
+
+        const earlyWindowMinutes = Number(
+          attendanceShift.earlyCheckInWindowMinutes ?? 15,
+        );
+
+        const earliestCheckIn = new Date(
+          shiftStart.getTime() - earlyWindowMinutes * 60_000,
+        );
+
+        if (currentTime < earliestCheckIn) {
+          throw new ApiError(
+            400,
+            "Re-check-in is not permitted before the scheduled shift check-in window.",
+          );
+        }
+
+        if (currentTime >= shiftEnd) {
+          const allowPostShiftCheckIn =
+            attendanceShift.allowPostShiftCheckIn === true;
+
+          const postShiftWindowMinutes = Number(
+            attendanceShift.postShiftCheckInWindowMinutes ?? 0,
+          );
+
+          const latestAllowedCheckIn = new Date(
+            shiftEnd.getTime() + postShiftWindowMinutes * 60_000,
+          );
+
+          if (
+            !allowPostShiftCheckIn ||
+            postShiftWindowMinutes <= 0 ||
+            currentTime >= latestAllowedCheckIn
+          ) {
+            throw new ApiError(
+              400,
+              "Your scheduled shift has ended. Re-check-in is not permitted outside the configured post-shift window.",
+            );
+          }
         }
 
         attendance.workSessions.push({
@@ -3081,10 +3387,66 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
     requesterContext,
   });
 
-  const attendanceDate = getAttendanceDateInTimezone(
-    new Date(),
-    company.timezone || "Asia/Kolkata",
-  );
+  const currentTime = new Date();
+  const timezone = company.timezone || "Asia/Kolkata";
+
+  const shift = await resolveAssignedShift({
+    companyId,
+    companyAccess,
+    currentTime,
+  });
+
+  let attendanceDate = resolveShiftAttendanceDate({
+    currentTime,
+    shift,
+    timezone,
+  });
+
+  const localDate = getAttendanceDateInTimezone(currentTime, timezone);
+  const previousDate = addDaysToDateString(localDate, -1);
+
+  /**
+   * Find an existing overnight attendance record
+   * using its original shift snapshot.
+   */
+  const previousOvernightAttendance = await Attendance.findOne({
+    companyId,
+    companyAccessId: companyAccess._id,
+    attendanceDate: previousDate,
+    isDeleted: false,
+    "shiftSnapshot.isOvernight": true,
+  }).lean();
+
+  if (previousOvernightAttendance?.workSessions?.length) {
+    const savedShift = previousOvernightAttendance.shiftSnapshot;
+
+    const previousWindowStillActive = isWithinShiftCheckInWindow({
+      currentTime,
+      attendanceDate: previousDate,
+      shift: savedShift,
+      timezone,
+      isReCheckIn: true,
+    });
+
+    const todayFirstCheckInAllowed = isWithinShiftCheckInWindow({
+      currentTime,
+      attendanceDate: localDate,
+      shift,
+      timezone,
+      isReCheckIn: false,
+    });
+
+    const previousSessionStillOpen = hasOpenWorkSession(
+      previousOvernightAttendance,
+    );
+
+    if (
+      !todayFirstCheckInAllowed &&
+      (previousSessionStillOpen || previousWindowStillActive)
+    ) {
+      attendanceDate = previousDate;
+    }
+  }
 
   const workDay = await resolveWorkDay({
     companyId,
@@ -3101,6 +3463,39 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
     isDeleted: false,
   }).populate(attendancePopulate);
 
+  const canFirstCheckIn = isWithinShiftCheckInWindow({
+    currentTime,
+    attendanceDate,
+    shift,
+    timezone,
+    isReCheckIn: false,
+  });
+
+  const { shiftStart, shiftEnd } = getShiftBoundaries({
+    attendanceDate,
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    isOvernight: shift.isOvernight,
+    timezone,
+  });
+
+  const earlyCheckInWindowMinutes = Number(
+    shift.earlyCheckInWindowMinutes ?? 15,
+  );
+
+  const earliestCheckInAt = new Date(
+    shiftStart.getTime() - earlyCheckInWindowMinutes * 60_000,
+  );
+
+  const checkInWindow = {
+    opensAt: earliestCheckInAt.toISOString(),
+    shiftStartsAt: shiftStart.toISOString(),
+    shiftEndsAt: shiftEnd.toISOString(),
+    earlyCheckInWindowMinutes,
+    lateGraceMinutes: Number(shift.lateGraceMinutes ?? 0),
+    timezone,
+  };
+
   /**
    * No attendance created for today yet.
    */
@@ -3109,6 +3504,8 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
       attendanceDate,
 
       attendance: null,
+
+      checkInWindow,
 
       workDay: {
         isWorkingDay: workDay.isWorkingDay,
@@ -3123,7 +3520,7 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
         onBreak: false,
         onFieldVisit: false,
 
-        canCheckIn: true,
+        canCheckIn: canFirstCheckIn,
         canStartBreak: false,
         canEndBreak: false,
         canStartFieldVisit: false,
@@ -3135,6 +3532,23 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
   const openSession = getOpenWorkSession(attendance);
 
   const activeBreak = getActiveBreak(attendance);
+
+  /**
+   * Match the attendance record against the same eligibility
+   * rules used by checkout and break endpoints.
+   */
+  const actionableAttendance = await findActionableOpenAttendance({
+    companyId,
+    companyAccessId: companyAccess._id,
+    currentTime,
+    timezone,
+  });
+
+  const canActOnOpenSession =
+    Boolean(openSession) &&
+    Boolean(actionableAttendance) &&
+    String(actionableAttendance._id) === String(attendance._id) &&
+    attendance.payrollStatus !== "FINALIZED";
 
   /**
    * Check whether an active field visit exists for
@@ -3157,10 +3571,33 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
     .select("_id visitType siteName purpose startedAt")
     .lean();
 
+  const attendancePolicy = await resolveAttendancePolicyById({
+    companyId,
+    policyId: attendance.attendancePolicyId,
+  });
+
+  const canReCheckIn =
+    attendance.payrollStatus !== "FINALIZED" &&
+    attendancePolicy.allowReCheckInSameDay === true &&
+    attendancePolicy.allowMultipleWorkSessions === true &&
+    attendance.workSessions.length > 0 &&
+    !openSession &&
+    !activeBreak &&
+    !activeFieldVisit &&
+    isWithinShiftCheckInWindow({
+      currentTime,
+      attendanceDate: attendance.attendanceDate,
+      shift: attendance.shiftSnapshot,
+      timezone,
+      isReCheckIn: true,
+    });
+
   return {
     attendanceDate,
 
     attendance,
+
+    checkInWindow,
 
     workDay: {
       isWorkingDay: workDay.isWorkingDay,
@@ -3177,16 +3614,20 @@ export const getMyTodayAttendance = async ({ companyId, requesterContext }) => {
 
       onFieldVisit: Boolean(activeFieldVisit),
 
-      canCheckIn: !openSession && !activeBreak && !activeFieldVisit,
-      canStartBreak: Boolean(openSession) && !activeBreak && !activeFieldVisit,
+      canCheckIn: canReCheckIn,
+      canStartBreak:
+        canActOnOpenSession &&
+        !activeBreak &&
+        !activeFieldVisit &&
+        (attendance.shiftSnapshot?.allowMultipleBreaks !== false ||
+          attendance.breaks.length === 0),
 
-      canEndBreak: Boolean(activeBreak),
+      canEndBreak: canActOnOpenSession && Boolean(activeBreak),
 
       canStartFieldVisit:
-        Boolean(openSession) && !activeBreak && !activeFieldVisit,
+        canActOnOpenSession && !activeBreak && !activeFieldVisit,
 
-      canCheckOut: Boolean(openSession) && !activeFieldVisit,
-
+      canCheckOut: canActOnOpenSession && !activeFieldVisit,
       activeFieldVisit: activeFieldVisit || null,
     },
   };

@@ -468,6 +468,21 @@ const shiftBaseSchema = z
 
     halfDayMinutes: z.number().int().min(1).max(1440),
 
+    earlyCheckInWindowMinutes: z.number().int().min(0).max(120).default(15),
+
+    /**
+     * Allow an employee to re-check-in after shift end.
+     * Only applicable when multiple work sessions and
+     * same-day re-check-in are permitted by attendance policy.
+     */
+    allowPostShiftCheckIn: z.boolean().default(false),
+
+    /**
+     * Maximum number of minutes after shift end
+     * during which re-check-in is permitted.
+     */
+    postShiftCheckInWindowMinutes: z.number().int().min(0).max(240).default(0),
+
     lateGraceMinutes: z.number().int().min(0).max(720).default(0),
 
     earlyCheckoutGraceMinutes: z.number().int().min(0).max(720).default(0),
