@@ -547,17 +547,24 @@ const validateShiftBusinessRules = (data, ctx) => {
     });
   }
 
-  if (
-    data.isOvernight === false &&
-    data.startTime &&
-    data.endTime &&
-    data.startTime === data.endTime
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["endTime"],
-      message: "Normal shift start time and end time cannot be the same.",
-    });
+  if (data.startTime && data.endTime) {
+    if (data.isOvernight === false && data.endTime <= data.startTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endTime"],
+        message:
+          "For a same-day shift, end time must be later than start time.",
+      });
+    }
+
+    if (data.isOvernight === true && data.endTime >= data.startTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endTime"],
+        message:
+          "For an overnight shift, end time must be earlier than start time.",
+      });
+    }
   }
 };
 
@@ -1467,6 +1474,26 @@ export const getMonthlyAttendanceReportSchema = z.object({
       search: z.string().trim().max(100).optional(),
 
       ...paginationQuerySchema,
+    })
+    .strict(),
+
+  body: emptyBodySchema,
+});
+
+export const exportMonthlyAttendanceReportSchema = z.object({
+  params: attendanceCompanyParamsSchema,
+
+  query: z
+    .object({
+      month: z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Month must use YYYY-MM format."),
+
+      departmentId: objectIdSchema.optional(),
+
+      teamId: objectIdSchema.optional(),
+
+      search: z.string().trim().max(100).optional(),
     })
     .strict(),
 

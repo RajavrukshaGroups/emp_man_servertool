@@ -191,6 +191,12 @@ export const updateShift = async ({
        * values when only one related field is changed.
        */
       const merged = {
+        startTime: data.startTime ?? shift.startTime,
+
+        endTime: data.endTime ?? shift.endTime,
+
+        isOvernight: data.isOvernight ?? shift.isOvernight,
+
         fullDayMinutes: data.fullDayMinutes ?? shift.fullDayMinutes,
 
         halfDayMinutes: data.halfDayMinutes ?? shift.halfDayMinutes,
@@ -208,6 +214,26 @@ export const updateShift = async ({
         effectiveTo:
           data.effectiveTo !== undefined ? data.effectiveTo : shift.effectiveTo,
       };
+
+      /**
+       * Validate shift timings against the complete configuration.
+       *
+       * This protects partial PATCH requests where only startTime,
+       * endTime, or isOvernight is provided.
+       */
+      if (merged.isOvernight === false && merged.endTime <= merged.startTime) {
+        throw new ApiError(
+          400,
+          "For a same-day shift, end time must be later than start time.",
+        );
+      }
+
+      if (merged.isOvernight === true && merged.endTime >= merged.startTime) {
+        throw new ApiError(
+          400,
+          "For an overnight shift, end time must be earlier than start time.",
+        );
+      }
 
       if (merged.halfDayMinutes > merged.fullDayMinutes) {
         throw new ApiError(

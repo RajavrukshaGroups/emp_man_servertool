@@ -49,6 +49,7 @@ import {
   approveRegularizationSchema,
   rejectRegularizationSchema,
   cancelRegularizationSchema,
+  exportMonthlyAttendanceReportSchema,
 } from "./attendance.validation.js";
 
 import {
@@ -64,7 +65,11 @@ import {
   getDailySummary,
 } from "./attendance.controller.js";
 
-import { getMonthlyReport } from "./attendanceReport.controller.js";
+import {
+  getMonthlyReport,
+  exportMonthlyReportExcel,
+  exportMonthlyReportPdf,
+} from "./attendanceReport.controller.js";
 
 import {
   createPolicy,
@@ -587,6 +592,20 @@ router.get(
   authorize(PERMISSIONS.ATTENDANCE_SUMMARY_READ),
   validate(getMonthlyAttendanceReportSchema),
   getMonthlyReport,
+);
+
+router.get(
+  "/reports/monthly/export",
+  authorize(PERMISSIONS.ATTENDANCE_SUMMARY_READ),
+  validate(exportMonthlyAttendanceReportSchema),
+  exportMonthlyReportExcel,
+);
+
+router.get(
+  "/reports/monthly/export/pdf",
+  authorize(PERMISSIONS.ATTENDANCE_SUMMARY_READ),
+  validate(exportMonthlyAttendanceReportSchema),
+  exportMonthlyReportPdf,
 );
 
 /**
