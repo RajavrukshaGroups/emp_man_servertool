@@ -2,6 +2,8 @@ import PDFDocument from "pdfkit";
 
 import { loadMonthlyAttendanceExportData } from "./attendanceReport.export.service.js";
 
+import { resolveAttendanceExportMetadata } from "./attendanceReport.exportMetadata.js";
+
 const STATUS_CODES = {
   PRESENT: "P",
   HALF_DAY: "HD",
@@ -75,7 +77,9 @@ const drawCell = (doc, text, x, y, width, height, options = {}) => {
     });
 };
 
-const drawPageHeader = (doc, report, sectionNumber, sectionCount) => {
+const drawPageHeader = (doc, report, sectionNumber, sectionCount, metadata) => {
+  const { departmentName, teamName } = metadata;
+
   doc
     .font("Helvetica-Bold")
     .fontSize(17)
@@ -92,7 +96,21 @@ const drawPageHeader = (doc, report, sectionNumber, sectionCount) => {
       53,
     );
 
-  doc.text(`Date section ${sectionNumber} of ${sectionCount}`, MARGIN, 69);
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(9)
+    .fillColor("#1E40AF")
+    .text(`Department: ${departmentName}   |   Team: ${teamName}`, MARGIN, 70, {
+      width: doc.page.width - MARGIN * 2,
+      lineBreak: false,
+      ellipsis: true,
+    });
+
+  doc
+    .font("Helvetica")
+    .fontSize(8)
+    .fillColor("#64748B")
+    .text(`Date section ${sectionNumber} of ${sectionCount}`, MARGIN, 88);
 };
 
 const drawLegend = (doc, y) => {
@@ -139,7 +157,7 @@ const drawLegend = (doc, y) => {
   }
 };
 
-const buildPdfBuffer = (report) =>
+const buildPdfBuffer = (report, metadata) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: "A3",
@@ -200,7 +218,13 @@ const buildPdfBuffer = (report) =>
       ) {
         doc.addPage();
 
-        drawPageHeader(doc, report, sectionIndex + 1, dateSections.length);
+        drawPageHeader(
+          doc,
+          report,
+          sectionIndex + 1,
+          dateSections.length,
+          metadata,
+        );
 
         const columns = [
           ...fixedColumns,
@@ -293,8 +317,13 @@ export const generateMonthlyAttendancePdf = async ({
     requesterContext,
   });
 
-  const buffer = await buildPdfBuffer(report);
+  const metadata = await resolveAttendanceExportMetadata({
+    companyId,
+    query,
+    requesterContext,
+  });
 
+  const buffer = await buildPdfBuffer(report, metadata);
   return {
     buffer,
     filename: `monthly-attendance-${report.month}.pdf`,

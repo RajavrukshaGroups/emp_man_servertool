@@ -122,6 +122,7 @@ export const generateMonthlyAttendanceExcel = async ({
   const { departmentName, teamName } = await resolveAttendanceExportMetadata({
     companyId,
     query,
+    requesterContext,
   });
 
   const workbook = new ExcelJS.Workbook();
@@ -197,7 +198,7 @@ export const generateMonthlyAttendanceExcel = async ({
     ...dateColumns.map((column) => column.header),
     ...totalColumns.map((column) => column.header),
   ];
-  
+
   const headerRow = sheet.getRow(5);
   headerRow.height = 26;
 
