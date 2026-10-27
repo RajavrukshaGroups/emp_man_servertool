@@ -287,6 +287,29 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
   }
 
   /**
+   * Reject access tokens issued before the latest password change.
+   *
+   * JWT iat uses seconds, while MongoDB dates use milliseconds.
+   * Tokens issued during the same second as a password change
+   * are also rejected to avoid timestamp precision gaps.
+   */
+  if (user.passwordChangedAt) {
+    const passwordChangedAtSeconds = Math.floor(
+      new Date(user.passwordChangedAt).getTime() / 1000,
+    );
+
+    if (
+      !Number.isInteger(payload.iat) ||
+      payload.iat <= passwordChangedAtSeconds
+    ) {
+      throw new ApiError(
+        401,
+        "Your password has changed. Please log in again.",
+      );
+    }
+  }
+
+  /**
    * Older tokens generated before accessType
    * was introduced are treated as company tokens.
    */

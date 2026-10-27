@@ -1,9 +1,17 @@
 import mongoose from "mongoose";
 
+import crypto from "node:crypto";
+
+import { env } from "../../config/env.js";
+import { sendEmail } from "../../services/email.service.js";
+
+import PasswordResetToken from "./passwordResetToken.model.js";
+
 import { ApiError } from "../../utils/ApiError.js";
 
 import User from "../users/user.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
+import Company from "../companies/company.model.js";
 
 import RefreshToken from "./refreshToken.model.js";
 import PlatformAccess from "../platform-access/platformAccess.model.js";
@@ -707,6 +715,25 @@ export const refreshAuthenticationToken = async ({
     throw new ApiError(401, "User account is unavailable.");
   }
 
+  /**
+   * Reject refresh tokens issued before the latest password change.
+   */
+  if (user.passwordChangedAt) {
+    const passwordChangedAtSeconds = Math.floor(
+      new Date(user.passwordChangedAt).getTime() / 1000,
+    );
+
+    if (
+      !Number.isInteger(payload.iat) ||
+      payload.iat <= passwordChangedAtSeconds
+    ) {
+      throw new ApiError(
+        401,
+        "Your password has changed. Please log in again.",
+      );
+    }
+  }
+
   let companyAccess = null;
   let platformAccess = null;
 
@@ -997,4 +1024,317 @@ export const changeAuthenticatedUserPassword = async ({
   );
 
   return true;
+};
+
+/**
+ * Request a password reset link.
+ * Always returns the same public response to prevent
+ * revealing whether an email address is registered.
+ */
+export const requestPasswordReset = async ({
+  email,
+  companySlug,
+  ipAddress = "",
+}) => {
+  const publicMessage =
+    "If an account exists with this email address, a password reset link will be sent.";
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const user = await User.findOne({
+    email: normalizedEmail,
+    status: "ACTIVE",
+    isDeleted: false,
+  });
+
+  if (!user) {
+    return publicMessage;
+  }
+
+  /**
+   * Resolve the selected company.
+   * Only active, non-deleted companies can initiate recovery.
+   */
+  const company = await Company.findOne({
+    slug: companySlug,
+    status: "ACTIVE",
+    isDeleted: false,
+  }).select("_id name slug");
+
+  if (!company) {
+    return publicMessage;
+  }
+
+  /**
+   * Confirm that this user has active access
+   * to the selected company.
+   */
+  const companyAccess = await CompanyAccess.exists({
+    userId: user._id,
+    companyId: company._id,
+    status: "ACTIVE",
+    isDeleted: false,
+  });
+
+  if (!companyAccess) {
+    return publicMessage;
+  }
+
+  /**
+   * Prevent repeated password reset requests for the same account.
+   * Keep the response generic to avoid exposing account existence.
+   */
+  const PASSWORD_RESET_COOLDOWN_MS = 5 * 60 * 1000;
+
+  const recentResetRequest = await PasswordResetToken.findOne({
+    userId: user._id,
+    createdAt: {
+      $gt: new Date(Date.now() - PASSWORD_RESET_COOLDOWN_MS),
+    },
+  }).lean();
+
+  if (recentResetRequest) {
+    return publicMessage;
+  }
+
+  // Generate a cryptographically secure reset token.
+  const rawToken = crypto.randomBytes(32).toString("hex");
+
+  // Never store the raw reset token in MongoDB.
+  const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+  /**
+   * Remove expired or consumed reset records before creating a new one.
+   * Do not invalidate an existing unexpired, unused link.
+   */
+  await PasswordResetToken.deleteMany({
+    userId: user._id,
+    $or: [{ expiresAt: { $lte: new Date() } }, { usedAt: { $ne: null } }],
+  });
+
+  let resetTokenRecord;
+
+  try {
+    resetTokenRecord = await PasswordResetToken.create({
+      userId: user._id,
+      companyId: company._id,
+      tokenHash,
+      expiresAt,
+      createdByIp: ipAddress.replace("::ffff:", "").slice(0, 100),
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      // Another unused token already exists.
+      // Return the same response to avoid exposing account information.
+      return publicMessage;
+    }
+
+    throw error;
+  }
+
+  const resetUrl = new URL("/reset-password", env.CLIENT_URL);
+  resetUrl.searchParams.set("token", rawToken);
+
+  const displayName = user.firstName || user.displayName || "Employee";
+
+  const subject = "Reset Your Employee Management Password";
+
+  const text = [
+    `Hello ${displayName},`,
+    "",
+    "We received a request to reset your Employee Management password.",
+    "",
+    `Reset your password using this link: ${resetUrl.toString()}`,
+    "",
+    "This link expires in 15 minutes and can only be used once.",
+    "",
+    "If you did not request this reset, you can ignore this email.",
+    "",
+    "Employee Management System",
+  ].join("\n");
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;">
+      <h2>Password Reset Request</h2>
+      <p>Hello ${escapeHtml(displayName)},</p>
+      <p>We received a request to reset your Employee Management password.</p>
+      <p>
+        <a href="${escapeHtml(resetUrl.toString())}"
+           style="display:inline-block;padding:12px 20px;background:#1d4ed8;color:#ffffff;text-decoration:none;border-radius:6px;">
+          Reset Password
+        </a>
+      </p>
+      <p>This link expires in <strong>15 minutes</strong> and can only be used once.</p>
+      <p>If you did not request this, you can ignore this email.</p>
+    </div>
+  `;
+
+  try {
+    await sendEmail({
+      companyId: company._id,
+      to: user.email,
+      subject,
+      text,
+      html,
+    });
+  } catch (error) {
+    // Prevent a failed email attempt from leaving an active reset link.
+    await PasswordResetToken.deleteOne({
+      _id: resetTokenRecord._id,
+    });
+
+    // Do not log reset URLs, tokens, or email contents.
+    console.error("Password reset email delivery failed.");
+
+    return publicMessage;
+  }
+
+  return publicMessage;
+};
+
+const escapeHtml = (value) =>
+  String(value).replace(/[&<>"']/g, (character) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+
+    return entities[character];
+  });
+
+/**
+ * Reset a user's password using a one-time recovery token.
+ */
+export const resetUserPassword = async ({
+  token,
+  newPassword,
+  ipAddress = "",
+}) => {
+  const invalidTokenMessage =
+    "Password reset link is invalid, expired, or already used.";
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  const session = await mongoose.startSession();
+
+  let userEmail = null;
+  let userName = null;
+
+  let resetCompanyId = null;
+
+  try {
+    await session.withTransaction(async () => {
+      const now = new Date();
+
+      // Atomically claim the token.
+      const resetRecord = await PasswordResetToken.findOneAndUpdate(
+        {
+          tokenHash,
+          usedAt: null,
+          expiresAt: { $gt: now },
+        },
+        {
+          $set: { usedAt: now },
+        },
+        {
+          new: true,
+          session,
+        },
+      );
+
+      if (!resetRecord) {
+        throw new ApiError(400, invalidTokenMessage);
+      }
+
+      const user = await User.findOne({
+        _id: resetRecord.userId,
+        status: "ACTIVE",
+        isDeleted: false,
+      })
+        .select("+password")
+        .session(session);
+
+      if (!user) {
+        throw new ApiError(400, invalidTokenMessage);
+      }
+
+      const isSamePassword = await user.comparePassword(newPassword);
+
+      if (isSamePassword) {
+        throw new ApiError(
+          400,
+          "New password must be different from the current password.",
+        );
+      }
+
+      user.password = newPassword;
+      user.updatedBy = user._id;
+
+      // User model hashes the password automatically.
+      await user.save({ session });
+
+      // Revoke every existing refresh session.
+      await RefreshToken.updateMany(
+        {
+          userId: user._id,
+          isRevoked: false,
+        },
+        {
+          $set: {
+            isRevoked: true,
+            revokedAt: now,
+            revokedByIp: ipAddress.replace("::ffff:", "").slice(0, 100),
+            revokeReason: "Password reset.",
+          },
+        },
+        { session },
+      );
+
+      // Invalidate any other outstanding reset links.
+      await PasswordResetToken.updateMany(
+        {
+          userId: user._id,
+          usedAt: null,
+        },
+        {
+          $set: { usedAt: now },
+        },
+        { session },
+      );
+
+      userEmail = user.email;
+      userName = user.firstName || user.displayName;
+      resetCompanyId = resetRecord.companyId;
+    });
+
+    // Send notification only after the transaction commits.
+    try {
+      await sendEmail({
+        companyId: resetCompanyId,
+        to: userEmail,
+        subject: "Your Employee Management Password Was Reset",
+        text: [
+          `Hello ${userName || "Employee"},`,
+          "",
+          "Your Employee Management account password was successfully reset.",
+          "",
+          "If you did not make this change, contact your company administrator immediately.",
+          "",
+          "Employee Management System",
+        ].join("\n"),
+      });
+    } catch {
+      // Email failure must not undo a successful password reset.
+      console.error("Password reset confirmation email failed.");
+    }
+
+    return true;
+  } finally {
+    await session.endSession();
+  }
 };

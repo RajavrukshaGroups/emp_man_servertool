@@ -30,6 +30,7 @@ import leavePolicyRoutes from "../modules/leave/leavePolicy.routes.js";
 import leaveTypeRoutes from "../modules/leave/leaveType.routes.js";
 import leaveBalanceRoutes from "../modules/leave/leaveBalance.routes.js";
 import leaveRequestRoutes from "../modules/leave/leaveRequest.routes.js";
+import companyEmailSettingsRoutes from "../modules/company-email-settings/companyEmailSettings.routes.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 
 const router = Router();
@@ -123,6 +124,12 @@ router.use("/companies/:companyId/leave/balances", leaveBalanceRoutes);
 router.use("/companies/:companyId/leave/requests", leaveRequestRoutes);
 
 router.use("/companies/:companyId/dashboard", dashboardRoutes);
+
+/**
+ * Company Email Settings
+ * Restricted to the authenticated Company's Administrator.
+ */
+router.use("/companies", companyEmailSettingsRoutes);
 
 /**
  * ============================================================

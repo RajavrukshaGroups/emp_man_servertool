@@ -14,6 +14,8 @@ import {
   logout as logoutService,
   logoutAll as logoutAllService,
   refreshAuthenticationToken as refreshTokenService,
+  requestPasswordReset as requestPasswordResetService,
+  resetUserPassword as resetUserPasswordService,
 } from "./auth.service.js";
 
 const getRequestIp = (req) => {
@@ -165,6 +167,52 @@ export const changePassword = asyncHandler(async (req, res) => {
         200,
         null,
         "Password changed successfully. Please log in again.",
+      ),
+    );
+});
+
+/**
+ * Request a password reset email.
+ * Public endpoint; no authentication required.
+ */
+
+export const forgotPassword = asyncHandler(async (req, res) => {
+  const { email, companySlug } = req.validated.body;
+
+  const message = await requestPasswordResetService({
+    email,
+    companySlug,
+    ipAddress: getRequestIp(req),
+  });
+
+  return res.status(200).json(new ApiResponse(200, null, message));
+});
+
+/**
+ * Reset password using a valid recovery token.
+ * Public endpoint; no authentication required.
+ */
+export const resetPassword = asyncHandler(async (req, res) => {
+  const { token, newPassword } = req.validated.body;
+
+  await resetUserPasswordService({
+    token,
+    newPassword,
+    ipAddress: getRequestIp(req),
+  });
+
+  res.clearCookie(
+    REFRESH_TOKEN_COOKIE_NAME,
+    getClearRefreshTokenCookieOptions(),
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        null,
+        "Password reset successfully. Please log in with your new password.",
       ),
     );
 });

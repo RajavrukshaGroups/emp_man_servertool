@@ -102,3 +102,60 @@ export const changePasswordSchema = z.object({
 
   query: z.object({}).strict().optional(),
 });
+
+export const forgotPasswordSchema = z.object({
+  body: z
+    .object({
+      email: z
+        .string()
+        .trim()
+        .email("Please enter a valid email address.")
+        .max(150, "Email cannot exceed 150 characters.")
+        .transform((email) => email.toLowerCase()),
+      companySlug: z
+        .string()
+        .trim()
+        .toLowerCase()
+        .min(2, "Company is required.")
+        .max(100, "Company identifier is too long.")
+        .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Invalid company identifier."),
+    })
+    .strict(),
+
+  params: z.object({}).strict().optional(),
+
+  query: z.object({}).strict().optional(),
+});
+
+/**
+ * Validate a password reset request.
+ */
+export const resetPasswordSchema = z.object({
+  body: z
+    .object({
+      token: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/i, "Invalid password reset token."),
+
+      newPassword: passwordSchema,
+
+      confirmPassword: z
+        .string()
+        .min(1, "Password confirmation is required.")
+        .max(128, "Password confirmation cannot exceed 128 characters."),
+    })
+    .strict()
+    .superRefine((body, context) => {
+      if (body.newPassword !== body.confirmPassword) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["confirmPassword"],
+          message: "New password and confirmation password do not match.",
+        });
+      }
+    }),
+
+  params: z.object({}).strict().optional(),
+
+  query: z.object({}).strict().optional(),
+});

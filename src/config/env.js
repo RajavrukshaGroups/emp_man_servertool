@@ -32,6 +32,21 @@ export const env = Object.freeze({
 
   CLIENT_URL: process.env.CLIENT_URL || "http://localhost:5173",
 
+  // Google Workspace SMTP configuration
+  SMTP_HOST: process.env.SMTP_HOST || "smtp.gmail.com",
+
+  SMTP_PORT: parseNumber(process.env.SMTP_PORT, 465),
+
+  SMTP_SECURE: process.env.SMTP_SECURE !== "false",
+
+  SMTP_USER: process.env.SMTP_USER || "",
+
+  SMTP_PASSWORD: process.env.SMTP_PASSWORD || "",
+
+  SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || "",
+
+  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || "Employee Management System",
+
   JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET,
   JWT_ACCESS_EXPIRES_IN: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
 
