@@ -176,12 +176,18 @@ export const changePassword = asyncHandler(async (req, res) => {
  * Public endpoint; no authentication required.
  */
 
+/**
+ * Request a password reset email.
+ * Public endpoint; no authentication required.
+ *
+ * The service automatically identifies an eligible company
+ * using the user's active company memberships.
+ */
 export const forgotPassword = asyncHandler(async (req, res) => {
-  const { email, companySlug } = req.validated.body;
+  const { email } = req.validated.body;
 
   const message = await requestPasswordResetService({
     email,
-    companySlug,
     ipAddress: getRequestIp(req),
   });
 

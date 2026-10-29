@@ -103,6 +103,13 @@ export const changePasswordSchema = z.object({
   query: z.object({}).strict().optional(),
 });
 
+/**
+ * Validate a forgot-password request.
+ *
+ * Only the registered email address is required.
+ * The backend automatically identifies an eligible
+ * company for sending the password reset email.
+ */
 export const forgotPasswordSchema = z.object({
   body: z
     .object({
@@ -112,13 +119,6 @@ export const forgotPasswordSchema = z.object({
         .email("Please enter a valid email address.")
         .max(150, "Email cannot exceed 150 characters.")
         .transform((email) => email.toLowerCase()),
-      companySlug: z
-        .string()
-        .trim()
-        .toLowerCase()
-        .min(2, "Company is required.")
-        .max(100, "Company identifier is too long.")
-        .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Invalid company identifier."),
     })
     .strict(),
 

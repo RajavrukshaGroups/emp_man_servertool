@@ -12,6 +12,7 @@ import { ApiError } from "../../utils/ApiError.js";
 import User from "../users/user.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Company from "../companies/company.model.js";
+import CompanyEmailSettings from "../company-email-settings/companyEmailSettings.model.js";
 
 import RefreshToken from "./refreshToken.model.js";
 import PlatformAccess from "../platform-access/platformAccess.model.js";
@@ -361,6 +362,8 @@ const buildAuthenticationResponse = ({ user, companyAccess, accessToken }) => {
 
   return {
     accessToken,
+    accessType: "COMPANY",
+    platformAccess: null,
 
     user: {
       _id: user._id,
@@ -1031,11 +1034,7 @@ export const changeAuthenticatedUserPassword = async ({
  * Always returns the same public response to prevent
  * revealing whether an email address is registered.
  */
-export const requestPasswordReset = async ({
-  email,
-  companySlug,
-  ipAddress = "",
-}) => {
+export const requestPasswordReset = async ({ email, ipAddress = "" }) => {
   const publicMessage =
     "If an account exists with this email address, a password reset link will be sent.";
 
@@ -1052,14 +1051,79 @@ export const requestPasswordReset = async ({
   }
 
   /**
-   * Resolve the selected company.
-   * Only active, non-deleted companies can initiate recovery.
+   * Find the user's active company memberships.
+   *
+   * Prefer the primary company, followed by the oldest
+   * membership, with _id as a stable tie-breaker.
    */
-  const company = await Company.findOne({
-    slug: companySlug,
+  const companyAccesses = await CompanyAccess.find({
+    userId: user._id,
     status: "ACTIVE",
     isDeleted: false,
-  }).select("_id name slug");
+  })
+    .select("companyId isPrimaryCompany")
+    .sort({
+      isPrimaryCompany: -1,
+      createdAt: 1,
+      _id: 1,
+    })
+    .lean();
+
+  if (companyAccesses.length === 0) {
+    return publicMessage;
+  }
+
+  const companyIds = companyAccesses.map((access) => access.companyId);
+
+  /**
+   * Only active companies with verified and enabled
+   * email settings are eligible to send reset emails.
+   */
+  const [companies, emailSettings] = await Promise.all([
+    Company.find({
+      _id: { $in: companyIds },
+      status: "ACTIVE",
+      isDeleted: false,
+    })
+      .select("_id name slug")
+      .lean(),
+
+    CompanyEmailSettings.find({
+      companyId: { $in: companyIds },
+      isEnabled: true,
+      isVerified: true,
+    })
+      .select("companyId")
+      .lean(),
+  ]);
+
+  const activeCompanyIds = new Set(
+    companies.map((company) => company._id.toString()),
+  );
+
+  const emailEnabledCompanyIds = new Set(
+    emailSettings.map((settings) => settings.companyId.toString()),
+  );
+
+  /**
+   * Choose the first eligible membership in the
+   * previously established priority order.
+   */
+  const selectedAccess = companyAccesses.find((access) => {
+    const companyId = access.companyId.toString();
+
+    return (
+      activeCompanyIds.has(companyId) && emailEnabledCompanyIds.has(companyId)
+    );
+  });
+
+  if (!selectedAccess) {
+    return publicMessage;
+  }
+
+  const company = companies.find(
+    (item) => item._id.toString() === selectedAccess.companyId.toString(),
+  );
 
   if (!company) {
     return publicMessage;
