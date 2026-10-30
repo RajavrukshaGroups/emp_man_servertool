@@ -150,6 +150,54 @@ const attendancePolicySchema = new mongoose.Schema(
 
     /**
      * ========================================================
+     * FACIAL ATTENDANCE VERIFICATION
+     * ========================================================
+     *
+     * Company-specific facial verification requirements.
+     *
+     * Face verification is disabled by default until
+     * enrollment and verification services are configured.
+     */
+
+    faceVerification: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+
+      requireForCheckIn: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForCheckOut: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForOffice: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForField: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForHybrid: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForRemote: {
+        type: Boolean,
+        default: true,
+      },
+    },
+
+    /**
+     * ========================================================
      * SCHEDULE COMPENSATION
      * ========================================================
      *

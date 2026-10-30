@@ -661,6 +661,31 @@ const attendancePolicyBaseSchema = z
 
     preventOverlappingSessions: z.boolean().default(true),
 
+    /**
+     * ========================================================
+     * FACIAL ATTENDANCE VERIFICATION
+     * ========================================================
+     */
+
+    faceVerification: z
+      .object({
+        enabled: z.boolean().default(false),
+
+        requireForCheckIn: z.boolean().default(true),
+
+        requireForCheckOut: z.boolean().default(true),
+
+        requireForOffice: z.boolean().default(true),
+
+        requireForField: z.boolean().default(true),
+
+        requireForHybrid: z.boolean().default(true),
+
+        requireForRemote: z.boolean().default(true),
+      })
+      .strict()
+      .optional(),
+
     missingCheckoutAction: z
       .enum(["FLAG_ONLY", "AUTO_CLOSE", "REQUIRE_REGULARIZATION"])
       .default("REQUIRE_REGULARIZATION"),

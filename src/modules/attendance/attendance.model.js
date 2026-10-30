@@ -75,6 +75,60 @@ const locationEvidenceSchema = new mongoose.Schema(
 );
 
 /**
+ * ============================================================
+ * FACIAL VERIFICATION EVIDENCE
+ * ============================================================
+ *
+ * Records the outcome of a trusted backend verification.
+ * Never accept these fields directly from employee input.
+ *
+ * Cloudinary evidence must use protected storage/delivery.
+ */
+
+const faceVerificationEvidenceSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ["VERIFIED", "EXEMPTED", "NOT_REQUIRED"],
+      required: true,
+    },
+
+    verificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    evidencePublicId: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: 500,
+    },
+
+    provider: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: 100,
+    },
+
+    exemptionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AttendanceFaceExemption",
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+/**
  * One employee may have multiple work sessions in one day.
  *
  * Example:
@@ -105,6 +159,16 @@ const workSessionSchema = new mongoose.Schema(
 
     checkOutLocation: {
       type: locationEvidenceSchema,
+      default: null,
+    },
+
+    checkInFaceVerification: {
+      type: faceVerificationEvidenceSchema,
+      default: null,
+    },
+
+    checkOutFaceVerification: {
+      type: faceVerificationEvidenceSchema,
       default: null,
     },
 
