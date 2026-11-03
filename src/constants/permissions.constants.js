@@ -99,6 +99,7 @@ export const PERMISSIONS = Object.freeze({
   ATTENDANCE_CHECK_IN: "attendance.check_in",
   ATTENDANCE_CHECK_OUT: "attendance.check_out",
   ATTENDANCE_READ: "attendance.read",
+  ATTENDANCE_PHOTO_VIEW: "attendance.photo_view",
   ATTENDANCE_CORRECTION_REQUEST: "attendance.correction_request",
   ATTENDANCE_CORRECTION_RECOMMEND: "attendance.correction_recommend",
   ATTENDANCE_CORRECTION_APPROVE: "attendance.correction_approve",

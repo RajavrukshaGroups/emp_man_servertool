@@ -143,6 +143,30 @@ export const getMyTodayAttendanceSchema = z.object({
 
 /**
  * ============================================================
+ * ATTENDANCE LOCATION ELIGIBILITY
+ * ============================================================
+ *
+ * Read-only GPS pre-check before opening the camera.
+ * Actual check-in/check-out must validate GPS again.
+ */
+export const attendanceLocationEligibilitySchema = z.object({
+  params: attendanceCompanyParamsSchema,
+
+  body: z
+    .object({
+      action: z.enum(["CHECK_IN", "CHECK_OUT"]),
+
+      location: locationEvidenceInputSchema.optional().nullable(),
+
+      attendanceLocationId: nullableObjectIdSchema,
+    })
+    .strict(),
+
+  query: emptyQuerySchema,
+});
+
+/**
+ * ============================================================
  * CHECK IN
  * ============================================================
  */
@@ -154,18 +178,11 @@ export const checkInSchema = z.object({
     .object({
       location: locationEvidenceInputSchema.optional().nullable(),
 
-      /**
-       * Optional approved location selected by frontend.
-       *
-       * Backend still validates:
-       * - company ownership
-       * - status
-       * - effective dates
-       * - geofence
-       */
       attendanceLocationId: nullableObjectIdSchema,
 
       notes: z.string().trim().max(1000).optional().default(""),
+
+      photoEvidenceId: objectIdSchema.optional(),
     })
     .strict(),
 
@@ -188,6 +205,8 @@ export const checkOutSchema = z.object({
       attendanceLocationId: nullableObjectIdSchema,
 
       notes: z.string().trim().max(1000).optional().default(""),
+
+      photoEvidenceId: objectIdSchema.optional(),
     })
     .strict(),
 
@@ -395,6 +414,29 @@ export const getAttendanceSchema = z.object({
   params: attendanceIdParamsSchema,
 
   query: emptyQuerySchema,
+
+  body: emptyBodySchema,
+});
+
+/**
+ * ============================================================
+ * GET ATTENDANCE WORK SESSION PHOTO
+ * ============================================================
+ */
+export const getAttendanceSessionPhotoSchema = z.object({
+  params: z
+    .object({
+      companyId: z.string().regex(/^[0-9a-fA-F]{24}$/),
+      attendanceId: z.string().regex(/^[0-9a-fA-F]{24}$/),
+      sessionId: z.string().regex(/^[0-9a-fA-F]{24}$/),
+    })
+    .strict(),
+
+  query: z
+    .object({
+      action: z.enum(["CHECK_IN", "CHECK_OUT"]),
+    })
+    .strict(),
 
   body: emptyBodySchema,
 });
@@ -682,6 +724,38 @@ const attendancePolicyBaseSchema = z
         requireForHybrid: z.boolean().default(true),
 
         requireForRemote: z.boolean().default(true),
+      })
+      .strict()
+      .optional(),
+
+    /**
+     * ========================================================
+     * ATTENDANCE PHOTO CAPTURE
+     * ========================================================
+     *
+     * Configurable company-level photo requirements.
+     * Separate from biometric facial verification.
+     */
+
+    photoCapture: z
+      .object({
+        enabled: z.boolean().optional(),
+
+        requireForCheckIn: z.boolean().optional(),
+
+        requireForCheckOut: z.boolean().optional(),
+
+        requireForFieldVisitStart: z.boolean().optional(),
+
+        requireForFieldVisitEnd: z.boolean().optional(),
+
+        requireForOffice: z.boolean().optional(),
+
+        requireForField: z.boolean().optional(),
+
+        requireForHybrid: z.boolean().optional(),
+
+        requireForRemote: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -1306,6 +1380,7 @@ export const startFieldVisitSchema = z.object({
 
       location: locationEvidenceInputSchema,
 
+      photoEvidenceId: objectIdSchema.optional(),
       notes: z.string().trim().max(2000).optional().default(""),
     })
     .strict(),
@@ -1319,6 +1394,8 @@ export const endFieldVisitSchema = z.object({
   body: z
     .object({
       location: locationEvidenceInputSchema,
+
+      photoEvidenceId: objectIdSchema.optional(),
 
       outcome: z.string().trim().max(2000).optional().default(""),
 
@@ -1523,4 +1600,80 @@ export const exportMonthlyAttendanceReportSchema = z.object({
     .strict(),
 
   body: emptyBodySchema,
+});
+
+/**
+ * ============================================================
+ * ATTENDANCE PHOTO EVIDENCE UPLOAD
+ * ============================================================
+ *
+ * The uploaded image will be processed separately
+ * using Multer and Sharp.
+ *
+ * This schema validates the company context and
+ * the requested attendance action.
+ */
+export const uploadAttendancePhotoEvidenceSchema = z.object({
+  params: attendanceCompanyParamsSchema,
+
+  body: z
+    .object({
+      action: z.enum([
+        "CHECK_IN",
+        "CHECK_OUT",
+        "FIELD_VISIT_START",
+        "FIELD_VISIT_END",
+      ]),
+
+      attendanceId: objectIdSchema.optional(),
+
+      fieldVisitId: objectIdSchema.optional(),
+    })
+    .strict()
+    .superRefine((data, ctx) => {
+      const isFieldVisitEnd = data.action === "FIELD_VISIT_END";
+
+      if (isFieldVisitEnd && !data.fieldVisitId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["fieldVisitId"],
+          message: "Field visit ID is required when ending a field visit.",
+        });
+      }
+
+      if (!isFieldVisitEnd && data.fieldVisitId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["fieldVisitId"],
+          message: "Field visit ID is not allowed for this action.",
+        });
+      }
+
+      if (
+        ["CHECK_IN", "FIELD_VISIT_START"].includes(data.action) &&
+        data.attendanceId
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["attendanceId"],
+          message: "Attendance ID is not allowed for this action.",
+        });
+      }
+    }),
+
+  query: emptyQuerySchema,
+});
+
+/**
+ * ============================================================
+ * ATTENDANCE PHOTO REQUIREMENT QUERY
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/photo-requirement
+ *
+ * Reuses upload action validation for consistency.
+ */
+export const getAttendancePhotoRequirementSchema = z.object({
+  params: attendanceCompanyParamsSchema,
+  query: uploadAttendancePhotoEvidenceSchema.shape.body,
 });

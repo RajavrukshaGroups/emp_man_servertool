@@ -1,4 +1,5 @@
 import {
+  checkAttendanceLocationEligibility,
   checkInAttendance,
   checkOutAttendance,
   endAttendanceBreak,
@@ -40,6 +41,39 @@ const getRequestMeta = (req) => {
 
     userAgent: req.get("user-agent") || "",
   };
+};
+
+/**
+ * ============================================================
+ * ATTENDANCE LOCATION ELIGIBILITY
+ * ============================================================
+ *
+ * POST /companies/:companyId/attendance/location-eligibility
+ *
+ * Read-only GPS/geofence validation before camera capture.
+ */
+export const checkLocationEligibility = async (req, res, next) => {
+  try {
+    const { companyId } = req.validated.params;
+
+    const requesterContext = getAttendanceRequesterContext(req);
+
+    const result = await checkAttendanceLocationEligibility({
+      companyId,
+      data: req.validated.body,
+      requesterContext,
+      requestMeta: getRequestMeta(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Attendance location eligibility verified successfully.",
+      data: result,
+    });
+  } catch (error) {
+    return next(error);
+  }
 };
 
 /**

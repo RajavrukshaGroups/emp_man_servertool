@@ -7,7 +7,22 @@ import { enforceCompanyContext } from "../../middlewares/enforceCompanyContext.m
 
 import { PERMISSIONS } from "../../constants/permissions.constants.js";
 
+import { requireAttendancePhotoCompanyContext } from "./attendancePhoto.middleware.js";
+
+import { uploadAttendancePhotoMiddleware } from "./attendancePhotoUpload.middleware.js";
+
 import {
+  authorizeAttendancePhotoEvidence,
+  authorizeAttendancePhotoRequirement,
+} from "./attendancePhotoEvidence.authorize.js";
+
+import {
+  uploadAttendancePhotoEvidence,
+  getAttendancePhotoRequirementController,
+} from "./attendancePhotoEvidence.controller.js";
+
+import {
+  attendanceLocationEligibilitySchema,
   checkInSchema,
   checkOutSchema,
   startBreakSchema,
@@ -17,6 +32,7 @@ import {
   getMyAttendanceCalendarSchema,
   listAttendanceSchema,
   getAttendanceSchema,
+  getAttendanceSessionPhotoSchema,
   createAttendancePolicySchema,
   listAttendancePoliciesSchema,
   getAttendancePolicySchema,
@@ -50,9 +66,12 @@ import {
   rejectRegularizationSchema,
   cancelRegularizationSchema,
   exportMonthlyAttendanceReportSchema,
+  uploadAttendancePhotoEvidenceSchema,
+  getAttendancePhotoRequirementSchema,
 } from "./attendance.validation.js";
 
 import {
+  checkLocationEligibility,
   checkIn,
   startBreak,
   endBreak,
@@ -113,6 +132,8 @@ import {
   cancelRegularization,
 } from "./attendanceRegularization.controller.js";
 
+import { viewAttendanceSessionPhoto } from "./attendancePhotoView.controller.js";
+
 const router = express.Router({
   mergeParams: true,
 });
@@ -128,6 +149,55 @@ const router = express.Router({
  */
 
 router.use(authenticate, enforceCompanyContext);
+
+/**
+ * ============================================================
+ * ATTENDANCE LOCATION ELIGIBILITY
+ * ============================================================
+ *
+ * Read-only GPS/geofence check before camera capture.
+ *
+ * CHECK_IN  -> ATTENDANCE_CHECK_IN permission
+ * CHECK_OUT -> ATTENDANCE_CHECK_OUT permission
+ */
+router.post(
+  "/location-eligibility",
+  validate(attendanceLocationEligibilitySchema),
+  (req, res, next) => {
+    const { action } = req.validated.body;
+
+    const permission =
+      action === "CHECK_IN"
+        ? PERMISSIONS.ATTENDANCE_CHECK_IN
+        : PERMISSIONS.ATTENDANCE_CHECK_OUT;
+
+    return authorize(permission)(req, res, next);
+  },
+  checkLocationEligibility,
+);
+
+/**
+ * ============================================================
+ * ATTENDANCE PHOTO EVIDENCE UPLOAD
+ * ============================================================
+ *
+ * POST /companies/:companyId/attendance/photo-evidence
+ */
+router.get(
+  "/photo-requirement",
+  requireAttendancePhotoCompanyContext,
+  validate(getAttendancePhotoRequirementSchema),
+  authorizeAttendancePhotoRequirement,
+  getAttendancePhotoRequirementController,
+);
+router.post(
+  "/photo-evidence",
+  requireAttendancePhotoCompanyContext,
+  uploadAttendancePhotoMiddleware,
+  validate(uploadAttendancePhotoEvidenceSchema),
+  authorizeAttendancePhotoEvidence,
+  uploadAttendancePhotoEvidence,
+);
 
 /**
  * ============================================================
@@ -635,6 +705,18 @@ router.get(
   authorize(PERMISSIONS.ATTENDANCE_READ),
   validate(listAttendanceSchema),
   listAttendance,
+);
+
+/**
+ * ============================================================
+ * SECURE ATTENDANCE WORK SESSION PHOTO
+ * ============================================================
+ */
+router.get(
+  "/:attendanceId/sessions/:sessionId/photo",
+  authorize(PERMISSIONS.ATTENDANCE_PHOTO_VIEW),
+  validate(getAttendanceSessionPhotoSchema),
+  viewAttendanceSessionPhoto,
 );
 
 /**

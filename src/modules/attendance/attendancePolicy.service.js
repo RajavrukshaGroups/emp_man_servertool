@@ -281,7 +281,25 @@ export const updateAttendancePolicy = async ({
         );
       }
 
-      Object.assign(existingPolicy, data);
+      /**
+       * Preserve existing nested photo-capture settings
+       * when an administrator updates only selected fields.
+       */
+      const { photoCapture, ...otherUpdates } = data;
+
+      Object.assign(existingPolicy, otherUpdates);
+
+      if (photoCapture !== undefined) {
+        const existingPhotoCapture =
+          existingPolicy.photoCapture?.toObject?.() ??
+          existingPolicy.photoCapture ??
+          {};
+
+        existingPolicy.set("photoCapture", {
+          ...existingPhotoCapture,
+          ...photoCapture,
+        });
+      }
 
       existingPolicy.updatedBy = requesterContext.userId ?? null;
 

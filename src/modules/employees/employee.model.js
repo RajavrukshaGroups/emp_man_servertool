@@ -163,7 +163,6 @@ const employeeSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "CompanyAccess",
       required: true,
-      index: true,
     },
 
     userId: {

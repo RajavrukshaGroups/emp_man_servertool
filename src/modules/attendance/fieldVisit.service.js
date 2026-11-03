@@ -4,10 +4,14 @@ import FieldVisit from "./fieldVisit.model.js";
 import Attendance from "./attendance.model.js";
 import AttendanceLocation from "./attendanceLocation.model.js";
 import AttendancePolicy from "./attendancePolicy.model.js";
+import AttendancePhotoEvidence from "./attendancePhotoEvidence.model.js";
+
+import { isAttendancePhotoRequired } from "./attendancePhotoPolicy.helper.js";
+import { consumeAttendancePhotoEvidence } from "./attendancePhotoEvidence.consume.js";
 
 import Client from "../clients/client.model.js";
 import Employee from "../employees/employee.model.js";
-
+import CompanyAccess from "../company-access/companyAccess.model.js";
 import { ApiError } from "../../utils/ApiError.js";
 
 import {
@@ -496,6 +500,22 @@ export const startFieldVisit = async ({
         session: mongoSession,
       });
 
+      const companyAccess = await CompanyAccess.findOne({
+        _id: identity.companyAccessId,
+        companyId,
+        status: "ACTIVE",
+        isDeleted: false,
+      })
+        .select("attendanceMode")
+        .session(mongoSession);
+
+      if (!companyAccess) {
+        throw new ApiError(
+          403,
+          "Active company access was not found for this employee.",
+        );
+      }
+
       const attendance = await resolveActiveAttendance({
         companyId,
         companyAccessId: identity.companyAccessId,
@@ -536,6 +556,26 @@ export const startFieldVisit = async ({
         session: mongoSession,
       });
 
+      const photoRequired = isAttendancePhotoRequired({
+        policy,
+        action: "FIELD_VISIT_START",
+        attendanceMode: companyAccess.attendanceMode,
+      });
+
+      if (photoRequired && !data.photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "Photo evidence is required to start this field visit.",
+        );
+      }
+
+      if (!photoRequired && data.photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "Photo evidence is not required for this field visit.",
+        );
+      }
+
       /**
        * If your policy model exposes fieldVisitEnabled,
        * enforce it here.
@@ -568,6 +608,18 @@ export const startFieldVisit = async ({
 
       const currentTime = new Date();
 
+      const openWorkSession = attendance.workSessions?.find(
+        (workSession) =>
+          workSession.status === "OPEN" && !workSession.checkOutAt,
+      );
+
+      if (!openWorkSession) {
+        throw new ApiError(
+          409,
+          "An active work session is required to start a field visit.",
+        );
+      }
+
       const startLocation = await buildLocationEvidence({
         companyId,
         location: data.location,
@@ -576,6 +628,21 @@ export const startFieldVisit = async ({
         currentTime,
         session: mongoSession,
       });
+
+      const startPhotoEvidence = photoRequired
+        ? await consumeAttendancePhotoEvidence({
+            evidenceId: data.photoEvidenceId,
+            companyId,
+            companyAccessId: identity.companyAccessId,
+            action: "FIELD_VISIT_START",
+            attendanceId: attendance._id,
+            workSessionId: openWorkSession._id,
+            fieldVisitId: null,
+            session: mongoSession,
+            currentTime,
+          })
+        : { status: "NOT_REQUIRED" };
+
       const [fieldVisit] = await FieldVisit.create(
         [
           {
@@ -601,6 +668,8 @@ export const startFieldVisit = async ({
 
             startLocation,
 
+            startPhotoEvidence,
+
             endedAt: null,
 
             endLocation: null,
@@ -623,9 +692,37 @@ export const startFieldVisit = async ({
         },
       );
 
+      // Link the consumed start photograph to the newly created field visit.
+      // Keep this update inside the existing MongoDB transaction.
+      if (photoRequired) {
+        const photoLinkResult = await AttendancePhotoEvidence.updateOne(
+          {
+            _id: data.photoEvidenceId,
+            companyId,
+            companyAccessId: identity.companyAccessId,
+            action: "FIELD_VISIT_START",
+            status: "CONSUMED",
+          },
+          {
+            $set: {
+              fieldVisitId: fieldVisit._id,
+            },
+          },
+          {
+            session: mongoSession,
+          },
+        );
+
+        if (photoLinkResult.matchedCount !== 1) {
+          throw new ApiError(
+            409,
+            "Unable to link the start photograph to the field visit.",
+          );
+        }
+      }
+
       createdFieldVisit = fieldVisit;
     });
-
     return await populateFieldVisit(FieldVisit.findById(createdFieldVisit._id));
   } catch (error) {
     /**
@@ -671,7 +768,14 @@ export const endFieldVisit = async ({
         companyId,
         companyAccessId: identity.companyAccessId,
         isDeleted: false,
-      }).session(mongoSession);
+      })
+        .select(
+          "+startPhotoEvidence.imagePublicId " +
+            "+startPhotoEvidence.imageAssetId " +
+            "+endPhotoEvidence.imagePublicId " +
+            "+endPhotoEvidence.imageAssetId",
+        )
+        .session(mongoSession);
 
       if (!fieldVisit) {
         throw new ApiError(404, "Field visit was not found.");
@@ -701,6 +805,42 @@ export const endFieldVisit = async ({
         session: mongoSession,
       });
 
+      const companyAccess = await CompanyAccess.findOne({
+        _id: identity.companyAccessId,
+        companyId,
+        status: "ACTIVE",
+        isDeleted: false,
+      })
+        .select("attendanceMode")
+        .session(mongoSession);
+
+      if (!companyAccess) {
+        throw new ApiError(
+          403,
+          "Active company access was not found for this employee.",
+        );
+      }
+
+      const photoRequired = isAttendancePhotoRequired({
+        policy,
+        action: "FIELD_VISIT_END",
+        attendanceMode: companyAccess.attendanceMode,
+      });
+
+      if (photoRequired && !data.photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "Photo evidence is required to end this field visit.",
+        );
+      }
+
+      if (!photoRequired && data.photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "Photo evidence is not required to end this field visit.",
+        );
+      }
+
       if (
         policy?.fieldVisitOutcomeRequired === true &&
         !String(data.outcome || "").trim()
@@ -721,10 +861,25 @@ export const endFieldVisit = async ({
         currentTime,
         session: mongoSession,
       });
+
+      const endPhotoEvidence = photoRequired
+        ? await consumeAttendancePhotoEvidence({
+            evidenceId: data.photoEvidenceId,
+            companyId,
+            companyAccessId: identity.companyAccessId,
+            action: "FIELD_VISIT_END",
+            attendanceId: attendance._id,
+            workSessionId: null,
+            fieldVisitId: fieldVisit._id,
+            session: mongoSession,
+            currentTime,
+          })
+        : { status: "NOT_REQUIRED" };
       fieldVisit.endedAt = currentTime;
 
       fieldVisit.endLocation = endLocation;
 
+      fieldVisit.endPhotoEvidence = endPhotoEvidence;
       fieldVisit.durationMinutes = calculateDurationMinutes(
         fieldVisit.startedAt,
         currentTime,
@@ -788,7 +943,14 @@ export const cancelFieldVisit = async ({
         companyId,
         companyAccessId: identity.companyAccessId,
         isDeleted: false,
-      }).session(mongoSession);
+      })
+        .select(
+          "+startPhotoEvidence.imagePublicId " +
+            "+startPhotoEvidence.imageAssetId " +
+            "+endPhotoEvidence.imagePublicId " +
+            "+endPhotoEvidence.imageAssetId",
+        )
+        .session(mongoSession);
 
       if (!fieldVisit) {
         throw new ApiError(404, "Field visit was not found.");

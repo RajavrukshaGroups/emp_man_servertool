@@ -198,6 +198,67 @@ const attendancePolicySchema = new mongoose.Schema(
 
     /**
      * ========================================================
+     * ATTENDANCE PHOTO CAPTURE
+     * ========================================================
+     *
+     * Company-configurable photo evidence requirements.
+     *
+     * This captures photographs for attendance events.
+     * It does NOT perform face recognition or liveness
+     * verification.
+     *
+     * Disabled by default until the complete upload,
+     * validation and frontend workflow is implemented.
+     */
+    photoCapture: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+
+      requireForCheckIn: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForCheckOut: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForFieldVisitStart: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForFieldVisitEnd: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForOffice: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForField: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForHybrid: {
+        type: Boolean,
+        default: true,
+      },
+
+      requireForRemote: {
+        type: Boolean,
+        default: true,
+      },
+    },
+
+    /**
+     * ========================================================
      * SCHEDULE COMPENSATION
      * ========================================================
      *

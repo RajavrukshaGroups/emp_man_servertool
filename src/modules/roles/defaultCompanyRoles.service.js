@@ -87,6 +87,7 @@ const DEFAULT_COMPANY_ROLES = [
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",
+      "attendance.photo_view",
 
       "attendance.correction_request",
       "attendance.correction_recommend",
@@ -171,6 +172,8 @@ const DEFAULT_COMPANY_ROLES = [
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",
+      "attendance.photo_view",
+
       "attendance.correction_request",
       "attendance.correction_recommend",
       "attendance.location_read",
@@ -227,9 +230,11 @@ const DEFAULT_COMPANY_ROLES = [
       "leave.balance_read",
 
       "calendar.read",
+
       "attendance.check_in",
       "attendance.check_out",
       "attendance.read",
+      "attendance.photo_view",
 
       "attendance.correction_request",
 

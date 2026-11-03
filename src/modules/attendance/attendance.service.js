@@ -6,6 +6,11 @@ import {
   resolveWorkCalendarRange,
 } from "../workCalendar/workCalendar.service.js";
 
+import { isAttendancePhotoRequired } from "./attendancePhotoPolicy.helper.js";
+import {
+  consumeAttendancePhotoEvidence,
+  consumeCheckInPhotoEvidence,
+} from "./attendancePhotoEvidence.consume.js";
 import Company from "../companies/company.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Employee from "../employees/employee.model.js";
@@ -173,7 +178,7 @@ const removeOpenCalculatedAnomalies = (attendance) => {
  * ============================================================
  */
 
-const resolveAttendanceCompany = async (companyId, session = null) => {
+export const resolveAttendanceCompany = async (companyId, session = null) => {
   let query = Company.findOne({
     _id: companyId,
     isDeleted: false,
@@ -205,7 +210,7 @@ const resolveAttendanceCompany = async (companyId, session = null) => {
  * ============================================================
  */
 
-const resolveSelfAttendanceContext = async ({
+export const resolveSelfAttendanceContext = async ({
   companyId,
   requesterContext,
   session = null,
@@ -282,7 +287,7 @@ const resolveSelfAttendanceContext = async ({
  * ============================================================
  */
 
-const resolveAssignedShift = async ({
+export const resolveAssignedShift = async ({
   companyId,
   companyAccess,
   currentTime,
@@ -527,7 +532,7 @@ const detectLeaveAttendanceConflict = ({
  *
  * Uses the attendance's saved shift snapshot for re-check-in.
  */
-const isWithinShiftCheckInWindow = ({
+export const isWithinShiftCheckInWindow = ({
   currentTime,
   attendanceDate,
   shift,
@@ -635,7 +640,7 @@ const createCompensationPolicySnapshot = (policy) => {
  * ============================================================
  */
 
-const resolveActiveAttendancePolicy = async ({
+export const resolveActiveAttendancePolicy = async ({
   companyId,
   currentTime,
   session = null,
@@ -688,7 +693,7 @@ const resolveActiveAttendancePolicy = async ({
  * the attendance record rather than resolving today's default
  * policy again.
  */
-const resolveAttendancePolicyById = async ({
+export const resolveAttendancePolicyById = async ({
   companyId,
   policyId,
   session = null,
@@ -1060,6 +1065,152 @@ const buildAttendanceLocationEvidence = async ({
 
 /**
  * ============================================================
+ * ATTENDANCE LOCATION ELIGIBILITY
+ * ============================================================
+ *
+ * Read-only GPS/geofence pre-check before opening the camera.
+ * Final check-in/check-out independently validates location.
+ */
+export const checkAttendanceLocationEligibility = async ({
+  companyId,
+  data,
+  requesterContext,
+  requestMeta = {},
+}) => {
+  const currentTime = new Date();
+  const { action } = data;
+
+  if (!["CHECK_IN", "CHECK_OUT"].includes(action)) {
+    throw new ApiError(400, "Invalid attendance action.");
+  }
+
+  const company = await resolveAttendanceCompany(companyId);
+
+  const { companyAccess } = await resolveSelfAttendanceContext({
+    companyId,
+    requesterContext,
+  });
+
+  const attendanceLocationPolicy = resolveAttendanceLocationPolicy({
+    companyAccess,
+    action,
+  });
+
+  if (
+    attendanceLocationPolicy === "GEOFENCE_REQUIRED" &&
+    !companyAccess.attendanceLocationId
+  ) {
+    throw new ApiError(
+      409,
+      "No attendance location has been assigned to this employee. Please contact the administrator.",
+    );
+  }
+
+  let policy;
+
+  if (action === "CHECK_IN") {
+    const activePolicy = await resolveActiveAttendancePolicy({
+      companyId,
+      currentTime,
+    });
+
+    const shift = await resolveAssignedShift({
+      companyId,
+      companyAccess,
+      currentTime,
+    });
+
+    const attendanceDate = await resolveCheckInAttendanceDate({
+      companyId,
+      companyAccessId: companyAccess._id,
+      currentTime,
+      shift,
+      timezone: company.timezone || "Asia/Kolkata",
+    });
+
+    const existingAttendance = await Attendance.findOne({
+      companyId,
+      companyAccessId: companyAccess._id,
+      attendanceDate,
+      isDeleted: false,
+    })
+      .select("attendancePolicyId")
+      .lean();
+
+    policy = existingAttendance
+      ? await resolveAttendancePolicyById({
+          companyId,
+          policyId: existingAttendance.attendancePolicyId,
+        })
+      : activePolicy;
+  } else {
+    const attendance = await findActionableOpenAttendance({
+      companyId,
+      companyAccessId: companyAccess._id,
+      currentTime,
+      timezone: company.timezone || "Asia/Kolkata",
+    });
+
+    if (!attendance) {
+      throw new ApiError(
+        409,
+        "No active attendance session was found to check out.",
+      );
+    }
+
+    if (attendance.payrollStatus === "FINALIZED") {
+      throw new ApiError(
+        409,
+        "Attendance cannot be changed because payroll has already been finalized.",
+      );
+    }
+
+    if (!getOpenWorkSession(attendance)) {
+      throw new ApiError(409, "No active work session was found.");
+    }
+
+    const activeFieldVisit = await FieldVisit.exists({
+      companyId,
+      companyAccessId: companyAccess._id,
+      attendanceId: attendance._id,
+      status: "IN_PROGRESS",
+      isDeleted: false,
+    });
+
+    if (activeFieldVisit) {
+      throw new ApiError(
+        409,
+        "You have an active field visit. Please end or cancel the field visit before checking out.",
+      );
+    }
+
+    policy = await resolveAttendancePolicyById({
+      companyId,
+      policyId: attendance.attendancePolicyId,
+    });
+  }
+
+  await buildAttendanceLocationEvidence({
+    companyId,
+    policy,
+    locationInput: data.location || null,
+    attendanceLocationId: companyAccess.attendanceLocationId || null,
+    attendanceLocationPolicy,
+    action,
+    currentTime,
+    requestMeta,
+  });
+
+  return {
+    eligible: true,
+    action,
+    attendanceLocationPolicy,
+    checkedAt: currentTime.toISOString(),
+  };
+};
+
+/**
+ * ============================================================
  * OPEN ATTENDANCE
  * ============================================================
  *
@@ -1103,12 +1254,13 @@ const findCurrentDayOpenAttendance = async ({
   return query;
 };
 
-const findActionableOpenAttendance = async ({
+export const findActionableOpenAttendance = async ({
   companyId,
   companyAccessId,
   currentTime,
   timezone,
   session = null,
+  includePhotoEvidence = false,
 }) => {
   const currentAttendanceDate = getAttendanceDateInTimezone(
     currentTime,
@@ -1131,12 +1283,20 @@ const findActionableOpenAttendance = async ({
     createdAt: -1,
   });
 
+  if (includePhotoEvidence) {
+    query = query.select(
+      "+workSessions.checkInPhotoEvidence.imagePublicId " +
+        "+workSessions.checkInPhotoEvidence.imageAssetId " +
+        "+workSessions.checkOutPhotoEvidence.imagePublicId " +
+        "+workSessions.checkOutPhotoEvidence.imageAssetId",
+    );
+  }
+
   if (session) {
     query = query.session(session);
   }
 
   const openAttendances = await query;
-
   if (!openAttendances.length) {
     return null;
   }
@@ -1213,7 +1373,7 @@ const findActionableOpenAttendance = async ({
  * ============================================================
  */
 
-const validatePreviousOpenAttendance = async ({
+export const validatePreviousOpenAttendance = async ({
   companyId,
   companyAccessId,
   attendanceDate,
@@ -1234,9 +1394,16 @@ const validatePreviousOpenAttendance = async ({
         checkOutAt: null,
       },
     },
-  }).sort({
-    attendanceDate: -1,
-  });
+  })
+    .select(
+      "+workSessions.checkInPhotoEvidence.imagePublicId " +
+        "+workSessions.checkInPhotoEvidence.imageAssetId " +
+        "+workSessions.checkOutPhotoEvidence.imagePublicId " +
+        "+workSessions.checkOutPhotoEvidence.imageAssetId",
+    )
+    .sort({
+      attendanceDate: -1,
+    });
 
   if (session) {
     query = query.session(session);
@@ -1285,38 +1452,19 @@ export const recalculateAttendance = async ({
     throw new ApiError(404, "Attendance record not found.");
   }
 
-  const workDay = await resolveWorkDay({
-    companyId: attendance.companyId,
-    date: attendance.attendanceDate,
-    session,
-  });
-
-  const shouldApplyShiftRules = workDay.isWorkingDay;
-
-  // Convert Mongoose subdocument into a plain JavaScript object
-  // so all shift configuration values are preserved.
+  // Actual attendance follows the employee's assigned shift,
+  // including when work is performed on weekly offs or holidays.
+  // Work Calendar classification remains unchanged for leave rules.
   const shiftSnapshot =
     typeof attendance.shiftSnapshot?.toObject === "function"
       ? attendance.shiftSnapshot.toObject()
       : { ...(attendance.shiftSnapshot || {}) };
-
-  // On weekly offs and holidays, preserve working-hour thresholds
-  // but disable normal shift start/end timing penalties.
-  const effectiveShiftSnapshot = shouldApplyShiftRules
-    ? shiftSnapshot
-    : {
-        ...shiftSnapshot,
-        startTime: null,
-        endTime: null,
-      };
-
   const result = calculateAttendanceTotals({
     workSessions: attendance.workSessions || [],
 
     breaks: attendance.breaks || [],
 
-    shiftSnapshot: effectiveShiftSnapshot,
-
+    shiftSnapshot,
     compensationPolicySnapshot: attendance.compensationPolicySnapshot || {},
 
     attendanceDate: attendance.attendanceDate,
@@ -2438,6 +2586,74 @@ export const getMyAttendanceCalendar = async ({
   };
 };
 
+export const resolveCheckInAttendanceDate = async ({
+  companyId,
+  companyAccessId,
+  currentTime,
+  shift,
+  timezone,
+  session = null,
+}) => {
+  let attendanceDate = resolveShiftAttendanceDate({
+    currentTime,
+    shift,
+    timezone,
+  });
+
+  const localDate = getAttendanceDateInTimezone(currentTime, timezone);
+  const previousDate = addDaysToDateString(localDate, -1);
+
+  let query = Attendance.findOne({
+    companyId,
+    companyAccessId,
+    attendanceDate: previousDate,
+    isDeleted: false,
+    "shiftSnapshot.isOvernight": true,
+  });
+
+  if (session) {
+    query = query.session(session);
+  }
+
+  const previousOvernightAttendance = await query;
+
+  if (previousOvernightAttendance?.workSessions?.length) {
+    const savedShift = previousOvernightAttendance.shiftSnapshot;
+
+    if (savedShift?.startTime && savedShift?.endTime) {
+      const { shiftEnd } = getShiftBoundaries({
+        attendanceDate: previousOvernightAttendance.attendanceDate,
+        startTime: savedShift.startTime,
+        endTime: savedShift.endTime,
+        isOvernight: savedShift.isOvernight,
+        timezone,
+      });
+
+      const postShiftMinutes = savedShift.allowPostShiftCheckIn
+        ? Number(savedShift.postShiftCheckInWindowMinutes ?? 0)
+        : 0;
+
+      const latestAllowedTime = new Date(
+        shiftEnd.getTime() + postShiftMinutes * 60_000,
+      );
+
+      const todayFirstCheckInAllowed = isWithinShiftCheckInWindow({
+        currentTime,
+        attendanceDate: localDate,
+        shift,
+        timezone,
+        isReCheckIn: false,
+      });
+
+      if (currentTime < latestAllowedTime && !todayFirstCheckInAllowed) {
+        attendanceDate = previousOvernightAttendance.attendanceDate;
+      }
+    }
+  }
+
+  return attendanceDate;
+};
+
 /**
  * ============================================================
  * CHECK IN
@@ -2487,74 +2703,14 @@ export const checkInAttendance = async ({
        * ==================================================
        */
 
-      let attendanceDate = resolveShiftAttendanceDate({
+      const attendanceDate = await resolveCheckInAttendanceDate({
+        companyId,
+        companyAccessId: companyAccess._id,
         currentTime,
         shift,
         timezone,
+        session,
       });
-
-      const localDate = getAttendanceDateInTimezone(currentTime, timezone);
-
-      const previousDate = addDaysToDateString(localDate, -1);
-
-      /**
-       * Check for an existing overnight attendance
-       * belonging to the previous calendar date.
-       */
-      const previousOvernightAttendance = await Attendance.findOne({
-        companyId,
-        companyAccessId: companyAccess._id,
-        attendanceDate: previousDate,
-        isDeleted: false,
-        "shiftSnapshot.isOvernight": true,
-      }).session(session);
-
-      if (previousOvernightAttendance) {
-        const savedShift = previousOvernightAttendance.shiftSnapshot;
-
-        if (savedShift?.startTime && savedShift?.endTime) {
-          const { shiftEnd } = getShiftBoundaries({
-            attendanceDate: previousOvernightAttendance.attendanceDate,
-            startTime: savedShift.startTime,
-            endTime: savedShift.endTime,
-            isOvernight: savedShift.isOvernight,
-            timezone,
-          });
-
-          const postShiftMinutes = savedShift.allowPostShiftCheckIn
-            ? Number(savedShift.postShiftCheckInWindowMinutes ?? 0)
-            : 0;
-
-          const latestAllowedTime = new Date(
-            shiftEnd.getTime() + postShiftMinutes * 60_000,
-          );
-
-          /**
-           * Existing overnight attendance takes priority
-           * while its shift or extension is still active.
-           */
-          const todayFirstCheckInAllowed = isWithinShiftCheckInWindow({
-            currentTime,
-            attendanceDate: localDate,
-            shift,
-            timezone,
-            isReCheckIn: false,
-          });
-
-          const previousSessionStillOpen = hasOpenWorkSession(
-            previousOvernightAttendance,
-          );
-
-          if (
-            currentTime < latestAllowedTime &&
-            previousOvernightAttendance.workSessions?.length > 0 &&
-            !todayFirstCheckInAllowed
-          ) {
-            attendanceDate = previousOvernightAttendance.attendanceDate;
-          }
-        }
-      }
-
       const workDay = await resolveWorkDay({
         companyId,
         date: attendanceDate,
@@ -2693,6 +2849,28 @@ export const checkInAttendance = async ({
           })
         : policy;
 
+      const photoRequired = isAttendancePhotoRequired({
+        policy: checkInPolicy,
+        action: "CHECK_IN",
+        attendanceMode,
+      });
+
+      const photoEvidenceId = data.photoEvidenceId || null;
+
+      if (photoRequired && !photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "A check-in photograph is required by company attendance policy.",
+        );
+      }
+
+      if (!photoRequired && photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "A check-in photograph is not required for this attendance action.",
+        );
+      }
+
       const locationEvidence = await buildAttendanceLocationEvidence({
         companyId,
 
@@ -2717,13 +2895,17 @@ export const checkInAttendance = async ({
 
       let attendance = await Attendance.findOne({
         companyId,
-
         companyAccessId: companyAccess._id,
-
         attendanceDate,
-
         isDeleted: false,
-      }).session(session);
+      })
+        .select(
+          "+workSessions.checkInPhotoEvidence.imagePublicId " +
+            "+workSessions.checkInPhotoEvidence.imageAssetId " +
+            "+workSessions.checkOutPhotoEvidence.imagePublicId " +
+            "+workSessions.checkOutPhotoEvidence.imageAssetId",
+        )
+        .session(session);
 
       /**
        * ====================================================
@@ -2739,16 +2921,11 @@ export const checkInAttendance = async ({
           timezone,
         });
 
-        const { lateMinutes, isLate } = workDay.isWorkingDay
-          ? calculateLateMinutes({
-              firstCheckInAt: currentTime,
-              shiftStart,
-              graceMinutes: shift.lateGraceMinutes ?? 0,
-            })
-          : {
-              lateMinutes: 0,
-              isLate: false,
-            };
+        const { lateMinutes, isLate } = calculateLateMinutes({
+          firstCheckInAt: currentTime,
+          shiftStart,
+          graceMinutes: shift.lateGraceMinutes ?? 0,
+        });
 
         const createdRecords = await Attendance.create(
           [
@@ -2837,6 +3014,34 @@ export const checkInAttendance = async ({
         );
 
         attendance = createdRecords[0];
+
+        const firstWorkSession = attendance.workSessions[0];
+
+        if (!firstWorkSession?._id) {
+          throw new ApiError(
+            500,
+            "The newly created attendance work session is unavailable.",
+          );
+        }
+
+        if (photoRequired) {
+          firstWorkSession.checkInPhotoEvidence =
+            await consumeCheckInPhotoEvidence({
+              evidenceId: photoEvidenceId,
+              companyId,
+              companyAccessId: companyAccess._id,
+              attendanceId: attendance._id,
+              workSessionId: firstWorkSession._id,
+              session,
+              currentTime,
+            });
+        } else {
+          firstWorkSession.checkInPhotoEvidence = {
+            status: "NOT_REQUIRED",
+          };
+        }
+
+        await attendance.save({ session });
       } else {
         /**
          * ==================================================
@@ -2968,10 +3173,58 @@ export const checkInAttendance = async ({
           status: "OPEN",
         });
 
+        const newWorkSession = attendance.workSessions.at(-1);
+
+        if (!newWorkSession?._id) {
+          throw new ApiError(
+            500,
+            "The newly created attendance work session is unavailable.",
+          );
+        }
+
+        if (photoRequired) {
+          newWorkSession.checkInPhotoEvidence =
+            await consumeCheckInPhotoEvidence({
+              evidenceId: photoEvidenceId,
+              companyId,
+              companyAccessId: companyAccess._id,
+              attendanceId: attendance._id,
+              workSessionId: newWorkSession._id,
+              session,
+              currentTime,
+            });
+        } else {
+          newWorkSession.checkInPhotoEvidence = {
+            status: "NOT_REQUIRED",
+          };
+        }
+
+        // Recalculate late arrival using the original first check-in.
+        // Apply the assigned shift rules even on weekly offs and holidays.
+        const { shiftStart: originalShiftStart } = getShiftBoundaries({
+          attendanceDate: attendance.attendanceDate,
+          startTime: attendanceShift.startTime,
+          endTime: attendanceShift.endTime,
+          isOvernight: attendanceShift.isOvernight,
+          timezone,
+        });
+
+        const firstCheckInAt =
+          attendance.workSessions[0]?.checkInAt ?? attendance.firstCheckInAt;
+
+        if (firstCheckInAt) {
+          const { lateMinutes, isLate } = calculateLateMinutes({
+            firstCheckInAt,
+            shiftStart: originalShiftStart,
+            graceMinutes: attendanceShift.lateGraceMinutes ?? 0,
+          });
+
+          attendance.lateMinutes = lateMinutes;
+          attendance.isLate = isLate;
+        }
+
         attendance.calculationStatus = "PENDING";
-
         attendance.attendanceStatus = "PENDING";
-
         attendance.updatedBy = requesterContext.userId || null;
 
         if (data.notes && !attendance.notes) {
@@ -3036,6 +3289,7 @@ export const startAttendanceBreak = async ({
         currentTime,
         timezone: company.timezone || "Asia/Kolkata",
         session,
+        includePhotoEvidence: true,
       });
 
       if (!attendance) {
@@ -3151,6 +3405,7 @@ export const endAttendanceBreak = async ({
         currentTime,
         timezone: company.timezone || "Asia/Kolkata",
         session,
+        includePhotoEvidence: true,
       });
 
       if (!attendance) {
@@ -3242,6 +3497,7 @@ export const checkOutAttendance = async ({
         currentTime,
         timezone: company.timezone || "Asia/Kolkata",
         session,
+        includePhotoEvidence: true,
       });
 
       if (!attendance) {
@@ -3294,6 +3550,48 @@ export const checkOutAttendance = async ({
 
       const attendanceMode =
         companyAccess.attendanceMode || attendance.attendanceMode || "OFFICE";
+
+      const photoRequired = isAttendancePhotoRequired({
+        policy,
+        action: "CHECK_OUT",
+        attendanceMode,
+      });
+
+      const photoEvidenceId = data.photoEvidenceId || null;
+
+      if (photoRequired && !photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "A check-out photograph is required by company attendance policy.",
+        );
+      }
+
+      if (!photoRequired && photoEvidenceId) {
+        throw new ApiError(
+          400,
+          "A check-out photograph is not required for this attendance action.",
+        );
+      }
+
+      if (photoRequired) {
+        const photoEvidence = await consumeAttendancePhotoEvidence({
+          evidenceId: photoEvidenceId,
+          companyId,
+          companyAccessId: companyAccess._id,
+          action: "CHECK_OUT",
+          attendanceId: attendance._id,
+          workSessionId: openSession._id,
+          fieldVisitId: null,
+          session,
+          currentTime,
+        });
+
+        openSession.checkOutPhotoEvidence = photoEvidence;
+      } else {
+        openSession.checkOutPhotoEvidence = {
+          status: "NOT_REQUIRED",
+        };
+      }
 
       const attendanceLocationPolicy = resolveAttendanceLocationPolicy({
         companyAccess,

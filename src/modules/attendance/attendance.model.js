@@ -129,6 +129,75 @@ const faceVerificationEvidenceSchema = new mongoose.Schema(
 );
 
 /**
+ * ============================================================
+ * ATTENDANCE PHOTO EVIDENCE
+ * ============================================================
+ *
+ * Records a camera photograph captured for an attendance action.
+ *
+ * IMPORTANT:
+ * - CAPTURED does not mean identity or liveness was verified.
+ * - Never accept these evidence fields directly from the frontend.
+ * - Cloudinary assets must use protected delivery.
+ */
+const attendancePhotoEvidenceSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ["CAPTURED", "EXEMPTED", "NOT_REQUIRED"],
+      required: true,
+    },
+
+    imagePublicId: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: 500,
+      select: false,
+    },
+
+    imageAssetId: {
+      type: String,
+      trim: true,
+      default: null,
+      select: false,
+    },
+
+    capturedAt: {
+      type: Date,
+      default: null,
+    },
+
+    exemptionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AttendanceFaceExemption",
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+attendancePhotoEvidenceSchema.pre("validate", function () {
+  if (this.status === "CAPTURED") {
+    if (!this.imagePublicId || !this.imageAssetId || !this.capturedAt) {
+      this.invalidate(
+        "status",
+        "Captured photo evidence requires image references and capture time.",
+      );
+    }
+  }
+
+  if (this.status === "EXEMPTED" && !this.exemptionId) {
+    this.invalidate(
+      "exemptionId",
+      "Exempted photo evidence requires an approved exemption reference.",
+    );
+  }
+});
+
+/**
  * One employee may have multiple work sessions in one day.
  *
  * Example:
@@ -169,6 +238,16 @@ const workSessionSchema = new mongoose.Schema(
 
     checkOutFaceVerification: {
       type: faceVerificationEvidenceSchema,
+      default: null,
+    },
+
+    checkInPhotoEvidence: {
+      type: attendancePhotoEvidenceSchema,
+      default: null,
+    },
+
+    checkOutPhotoEvidence: {
+      type: attendancePhotoEvidenceSchema,
       default: null,
     },
 

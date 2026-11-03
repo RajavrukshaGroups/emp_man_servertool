@@ -516,9 +516,14 @@ export const canAccessCompanyAccess = async ({
       session,
     });
   }
-
   if (isSelfCompanyAccess(requesterContext, targetCompanyAccessId)) {
     return true;
+  }
+
+  // Explicitly prevent SELF-scoped users from accessing
+  // another employee's attendance records.
+  if (requesterContext.roleScopeType === "SELF") {
+    return false;
   }
 
   const filter = await buildReadableCompanyAccessFilter({
@@ -528,8 +533,12 @@ export const canAccessCompanyAccess = async ({
   });
 
   const query = CompanyAccess.exists({
-    ...filter,
-    _id: targetCompanyAccessId,
+    $and: [
+      filter,
+      {
+        _id: targetCompanyAccessId,
+      },
+    ],
   });
 
   if (session) {
