@@ -53,6 +53,86 @@ const regularizationLocationSchema = new mongoose.Schema(
   },
 );
 
+/**
+ * ============================================================
+ * REGULARIZATION EDIT HISTORY
+ * ============================================================
+ *
+ * Preserves the previous and updated request values
+ * whenever an employee edits a pending regularization.
+ */
+
+const regularizationEditableValuesSchema = new mongoose.Schema(
+  {
+    requestedCheckInAt: {
+      type: Date,
+      default: null,
+    },
+
+    requestedCheckOutAt: {
+      type: Date,
+      default: null,
+    },
+
+    requestedBreakStartAt: {
+      type: Date,
+      default: null,
+    },
+
+    requestedBreakEndAt: {
+      type: Date,
+      default: null,
+    },
+
+    requestedBreakExtensionMinutes: {
+      type: Number,
+      default: null,
+    },
+
+    reason: {
+      type: String,
+      default: "",
+    },
+
+    attachmentUrl: {
+      type: String,
+      default: "",
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+const regularizationEditHistorySchema = new mongoose.Schema(
+  {
+    editedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    editedAt: {
+      type: Date,
+      required: true,
+      default: Date.now,
+    },
+
+    previousValues: {
+      type: regularizationEditableValuesSchema,
+      required: true,
+    },
+
+    newValues: {
+      type: regularizationEditableValuesSchema,
+      required: true,
+    },
+  },
+  {
+    _id: true,
+  },
+);
+
 const attendanceRegularizationSchema = new mongoose.Schema(
   {
     companyId: {
@@ -407,6 +487,28 @@ const attendanceRegularizationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
+    },
+
+    /**
+     * Complete history of edits to this request.
+     *
+     * Original attendance evidence remains unchanged.
+     */
+    editHistory: {
+      type: [regularizationEditHistorySchema],
+      default: [],
+    },
+
+    /**
+     * Revision number for optimistic concurrency control.
+     *
+     * Starts at 0 and increases after every successful edit.
+     * Prevents stale browser tabs from overwriting newer edits.
+     */
+    editRevision: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     deletedBy: {

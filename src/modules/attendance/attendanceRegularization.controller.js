@@ -3,6 +3,7 @@ import { ApiResponse } from "../../utils/ApiResponse.js";
 
 import {
   createAttendanceRegularization,
+  updateAttendanceRegularization,
   getMyAttendanceRegularizations,
   listAttendanceRegularizations,
   getAttendanceRegularizationById,
@@ -41,6 +42,38 @@ export const createRegularization = asyncHandler(async (req, res) => {
         201,
         regularization,
         "Attendance regularization request created successfully.",
+      ),
+    );
+});
+
+/**
+ * ============================================================
+ * UPDATE PENDING ATTENDANCE REGULARIZATION
+ * ============================================================
+ *
+ * Employee self-service only.
+ *
+ * Employees can edit only their own PENDING requests.
+ * Ownership and status are enforced inside the service.
+ */
+
+export const updateRegularization = asyncHandler(async (req, res) => {
+  const requesterContext = getAttendanceRequesterContext(req);
+
+  const regularization = await updateAttendanceRegularization({
+    companyId: req.validated.params.companyId,
+    regularizationId: req.validated.params.regularizationId,
+    data: req.validated.body,
+    requesterContext,
+  });
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        regularization,
+        "Attendance regularization request updated successfully.",
       ),
     );
 });

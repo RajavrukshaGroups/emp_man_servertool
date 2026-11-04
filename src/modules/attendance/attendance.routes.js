@@ -56,9 +56,11 @@ import {
   getMyFieldVisitHistorySchema,
   listFieldVisitsSchema,
   getFieldVisitSchema,
+  getFieldVisitPhotoSchema,
 
   // REGULARIZATION
   createRegularizationSchema,
+  updateRegularizationSchema,
   listRegularizationsSchema,
   getRegularizationSchema,
   recommendRegularizationSchema,
@@ -123,6 +125,7 @@ import {
 
 import {
   createRegularization,
+  updateRegularization,
   getMyRegularizations,
   listRegularizations,
   getRegularizationById,
@@ -133,6 +136,7 @@ import {
 } from "./attendanceRegularization.controller.js";
 
 import { viewAttendanceSessionPhoto } from "./attendancePhotoView.controller.js";
+import { viewFieldVisitPhoto } from "./fieldVisitPhotoView.controller.js";
 
 const router = express.Router({
   mergeParams: true,
@@ -491,6 +495,22 @@ router.get(
 );
 
 /**
+ * ============================================================
+ * SECURE FIELD VISIT PHOTO
+ * ============================================================
+ *
+ * GET /companies/:companyId/attendance/field-visits/:fieldVisitId/photo
+ *
+ * Query: action=START or action=END
+ */
+router.get(
+  "/field-visits/:fieldVisitId/photo",
+  authorize(PERMISSIONS.ATTENDANCE_PHOTO_VIEW),
+  validate(getFieldVisitPhotoSchema),
+  viewFieldVisitPhoto,
+);
+
+/**
  * GET FIELD VISIT BY ID
  *
  * GET
@@ -522,6 +542,25 @@ router.post(
   authorize(PERMISSIONS.ATTENDANCE_CORRECTION_REQUEST),
   validate(createRegularizationSchema),
   createRegularization,
+);
+
+/**
+ * ============================================================
+ * UPDATE OWN PENDING REGULARIZATION
+ * ============================================================
+ *
+ * PATCH
+ * /companies/:companyId/attendance/regularizations/:regularizationId
+ *
+ * Employee self-service only.
+ * Only PENDING requests may be edited.
+ */
+
+router.patch(
+  "/regularizations/:regularizationId",
+  authorize(PERMISSIONS.ATTENDANCE_CORRECTION_REQUEST),
+  validate(updateRegularizationSchema),
+  updateRegularization,
 );
 
 /**

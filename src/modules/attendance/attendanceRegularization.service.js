@@ -839,6 +839,237 @@ export const createAttendanceRegularization = async ({
 
 /**
  * ============================================================
+ * UPDATE PENDING ATTENDANCE REGULARIZATION
+ * ============================================================
+ */
+
+export const updateAttendanceRegularization = async ({
+  companyId,
+  regularizationId,
+  data,
+  requesterContext,
+}) => {
+  const session = await mongoose.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      const company = await resolveCompany({ companyId, session });
+
+      const { companyAccess, employee } =
+        await resolveSelfRegularizationContext({
+          companyId,
+          requesterContext,
+          session,
+        });
+
+      const regularization = await AttendanceRegularization.findOne({
+        _id: regularizationId,
+        companyId,
+        companyAccessId: companyAccess._id,
+        employeeId: employee._id,
+        isDeleted: false,
+      }).session(session);
+
+      if (!regularization) {
+        throw new ApiError(404, "Attendance regularization request not found.");
+      }
+
+      if (regularization.status !== "PENDING") {
+        throw new ApiError(
+          409,
+          "Only pending regularization requests can be edited.",
+        );
+      }
+
+      const currentRevision = regularization.editRevision ?? 0;
+
+      if (data.expectedRevision !== currentRevision) {
+        throw new ApiError(
+          409,
+          "This regularization request was modified by another session. Please refresh and try again.",
+        );
+      }
+
+      const attendance = await Attendance.findOne({
+        _id: regularization.attendanceId,
+        companyId,
+        companyAccessId: companyAccess._id,
+        employeeId: employee._id,
+        isDeleted: false,
+      }).session(session);
+
+      if (!attendance) {
+        throw new ApiError(404, "Attendance record not found.");
+      }
+
+      const policy = await resolveAttendancePolicy({
+        companyId,
+        attendance,
+        session,
+      });
+
+      validateRegularizationTypeAgainstPolicy({
+        requestType: regularization.requestType,
+        policy,
+      });
+
+      validateRegularizationWindow({
+        attendanceDate: attendance.attendanceDate,
+        policy,
+        timezone: company.timezone || "Asia/Kolkata",
+      });
+
+      const editableFields = [
+        "requestedCheckInAt",
+        "requestedCheckOutAt",
+        "requestedBreakStartAt",
+        "requestedBreakEndAt",
+        "requestedBreakExtensionMinutes",
+        "reason",
+        "attachmentUrl",
+      ];
+
+      const previousValues = {};
+
+      const newValues = {};
+
+      for (const field of editableFields) {
+        const value = regularization[field];
+
+        previousValues[field] =
+          value instanceof Date ? new Date(value) : (value ?? null);
+
+        newValues[field] = previousValues[field];
+      }
+
+      for (const field of editableFields) {
+        if (!Object.prototype.hasOwnProperty.call(data, field)) {
+          continue;
+        }
+
+        if (field.endsWith("At")) {
+          newValues[field] = data[field] ? new Date(data[field]) : null;
+        } else if (field === "reason" || field === "attachmentUrl") {
+          newValues[field] = normalizeText(data[field]);
+        } else {
+          newValues[field] = data[field];
+        }
+      }
+
+      if (!newValues.reason || newValues.reason.length < 3) {
+        throw new ApiError(
+          400,
+          "Regularization reason must contain at least 3 characters.",
+        );
+      }
+
+      const mergedRequest = {
+        requestType: regularization.requestType,
+        targetWorkSessionId: regularization.targetWorkSessionId,
+        targetBreakId: regularization.targetBreakId,
+        ...newValues,
+      };
+
+      validateRequestedValuesAgainstAttendance({
+        data: mergedRequest,
+        attendance,
+      });
+
+      /**
+       * Validate the complete updated document using the
+       * existing Mongoose document validation rules.
+       *
+       * This runs the model's pre("validate") hook before
+       * the conditional database update.
+       */
+      const validationDocument = new AttendanceRegularization(
+        regularization.toObject(),
+      );
+
+      for (const field of editableFields) {
+        validationDocument[field] = newValues[field];
+      }
+
+      await validationDocument.validate();
+
+      const valuesEqual = (left, right) => {
+        const normalize = (value) =>
+          value instanceof Date ? value.getTime() : (value ?? null);
+
+        return normalize(left) === normalize(right);
+      };
+
+      const hasChanges = editableFields.some(
+        (field) => !valuesEqual(previousValues[field], newValues[field]),
+      );
+
+      if (!hasChanges) {
+        throw new ApiError(
+          400,
+          "No changes were detected in the regularization request.",
+        );
+      }
+
+      const editedAt = new Date();
+
+      const updatedRegularization =
+        await AttendanceRegularization.findOneAndUpdate(
+          {
+            _id: regularization._id,
+            companyId,
+            companyAccessId: companyAccess._id,
+            employeeId: employee._id,
+            status: "PENDING",
+            isDeleted: false,
+            editRevision:
+              currentRevision === 0 ? { $in: [null, 0] } : currentRevision,
+          },
+          {
+            $set: {
+              ...newValues,
+              updatedBy: requesterContext.userId,
+            },
+            $push: {
+              editHistory: {
+                editedBy: requesterContext.userId,
+                editedAt,
+                previousValues,
+                newValues,
+              },
+            },
+            $inc: {
+              editRevision: 1,
+            },
+          },
+          {
+            session,
+            returnDocument: "after",
+            runValidators: true,
+          },
+        );
+
+      if (!updatedRegularization) {
+        throw new ApiError(
+          409,
+          "This regularization request is no longer pending. Please refresh and try again.",
+        );
+      }
+
+      result = updatedRegularization;
+    });
+
+    await result.populate(regularizationPopulate);
+
+    return result;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * ============================================================
  * MY REGULARIZATIONS
  * ============================================================
  */
@@ -1691,7 +1922,14 @@ export const approveAttendanceRegularization = async ({
         companyAccessId: regularization.companyAccessId,
         employeeId: regularization.employeeId,
         isDeleted: false,
-      }).session(session);
+      })
+        .select(
+          "+workSessions.checkInPhotoEvidence.imagePublicId " +
+            "+workSessions.checkInPhotoEvidence.imageAssetId " +
+            "+workSessions.checkOutPhotoEvidence.imagePublicId " +
+            "+workSessions.checkOutPhotoEvidence.imageAssetId",
+        )
+        .session(session);
 
       if (!attendance) {
         throw new ApiError(

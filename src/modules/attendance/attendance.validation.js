@@ -1235,6 +1235,51 @@ export const createRegularizationSchema = z.object({
   query: emptyQuerySchema,
 });
 
+/**
+ * ============================================================
+ * UPDATE PENDING REGULARIZATION
+ * ============================================================
+ *
+ * Only editable request values may be changed.
+ * The service enforces employee ownership and PENDING status.
+ */
+
+export const updateRegularizationSchema = z.object({
+  params: regularizationIdParamsSchema,
+
+  body: z
+    .object({
+      expectedRevision: z.number().int().min(0),
+
+      requestedCheckInAt: isoDateTimeSchema.optional().nullable(),
+
+      requestedCheckOutAt: isoDateTimeSchema.optional().nullable(),
+
+      requestedBreakStartAt: isoDateTimeSchema.optional().nullable(),
+
+      requestedBreakEndAt: isoDateTimeSchema.optional().nullable(),
+
+      requestedBreakExtensionMinutes: z
+        .number()
+        .int()
+        .min(0)
+        .max(720)
+        .optional()
+        .nullable(),
+
+      reason: z.string().trim().min(3).max(1500).optional(),
+
+      attachmentUrl: z.string().trim().max(1000).optional(),
+    })
+    .strict()
+    .refine(
+      (data) => Object.keys(data).some((key) => key !== "expectedRevision"),
+      "At least one field must be provided to update the regularization.",
+    ),
+
+  query: emptyQuerySchema,
+});
+
 export const listRegularizationsSchema = z.object({
   params: attendanceCompanyParamsSchema,
 
@@ -1510,6 +1555,23 @@ export const getFieldVisitSchema = z.object({
   params: fieldVisitIdParamsSchema,
 
   query: emptyQuerySchema,
+
+  body: emptyBodySchema,
+});
+
+/**
+ * ============================================================
+ * GET FIELD VISIT PHOTO
+ * ============================================================
+ */
+export const getFieldVisitPhotoSchema = z.object({
+  params: fieldVisitIdParamsSchema,
+
+  query: z
+    .object({
+      action: z.enum(["START", "END"]),
+    })
+    .strict(),
 
   body: emptyBodySchema,
 });
