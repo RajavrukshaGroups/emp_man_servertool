@@ -159,3 +159,39 @@ export const resetPasswordSchema = z.object({
 
   query: z.object({}).strict().optional(),
 });
+
+/**
+ * Validate an employee login invitation acceptance request.
+ *
+ * The employee must provide:
+ * - A valid invitation token.
+ * - A new password.
+ * - Matching password confirmation.
+ */
+export const acceptInvitationSchema = z.object({
+  body: z
+    .object({
+      token: z.string().regex(/^[a-f0-9]{64}$/i, "Invalid invitation token."),
+
+      newPassword: passwordSchema,
+
+      confirmPassword: z
+        .string()
+        .min(1, "Password confirmation is required.")
+        .max(128, "Password confirmation cannot exceed 128 characters."),
+    })
+    .strict()
+    .superRefine((body, context) => {
+      if (body.newPassword !== body.confirmPassword) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["confirmPassword"],
+          message: "New password and confirmation password do not match.",
+        });
+      }
+    }),
+
+  params: z.object({}).strict().optional(),
+
+  query: z.object({}).strict().optional(),
+});

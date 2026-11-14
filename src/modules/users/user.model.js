@@ -82,6 +82,13 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    passwordSetupStatus: {
+      type: String,
+      enum: ["LEGACY", "INVITATION_PENDING", "COMPLETED"],
+      default: "LEGACY",
+      index: true,
+    },
+
     mobileVerified: {
       type: Boolean,
       default: false,

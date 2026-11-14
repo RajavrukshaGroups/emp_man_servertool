@@ -24,6 +24,7 @@ export const createCompanyAccess = asyncHandler(async (req, res) => {
     companyId,
     req.validated.body,
     actorId,
+    req.user,
   );
 
   return res
@@ -76,6 +77,7 @@ export const updateCompanyAccess = asyncHandler(async (req, res) => {
     accessId,
     req.validated.body,
     req.user?.userId ?? null,
+    req.user,
   );
 
   return res
@@ -94,6 +96,7 @@ export const updateCompanyAccessStatus = asyncHandler(async (req, res) => {
     accessId,
     req.validated.body,
     req.user?.userId ?? null,
+    req.user,
   );
 
   return res
@@ -120,6 +123,7 @@ export const updateCompanyAccessRole = asyncHandler(async (req, res) => {
     accessId,
     roleId,
     req.user?.userId ?? null,
+    req.user,
   );
 
   return res
@@ -142,6 +146,7 @@ export const updateReportingManager = asyncHandler(async (req, res) => {
     accessId,
     reportingManagerId,
     req.user?.userId ?? null,
+    req.user,
   );
 
   return res
@@ -167,6 +172,7 @@ export const deleteCompanyAccess = asyncHandler(async (req, res) => {
     companyId,
     accessId,
     req.user?.userId ?? null,
+    req.user,
   );
 
   return res

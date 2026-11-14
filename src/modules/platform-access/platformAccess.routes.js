@@ -1,10 +1,8 @@
 import { Router } from "express";
 
 import { authenticate } from "../../middlewares/authenticate.middleware.js";
-import {
-  authorize,
-  authorizeRoles,
-} from "../../middlewares/authorize.middleware.js";
+import { authorize } from "../../middlewares/authorize.middleware.js";
+import { requirePlatformContext } from "../../middlewares/requirePlatformContext.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
 
 import {
@@ -33,7 +31,7 @@ const router = Router();
  * Platform Administrator routes
  */
 router.use(authenticate);
-router.use(authorizeRoles("SUPER_ADMIN"));
+router.use(requirePlatformContext);
 
 router.get(
   "/",
@@ -83,7 +81,7 @@ router.patch(
 export const platformRoleRouter = Router();
 
 platformRoleRouter.use(authenticate);
-platformRoleRouter.use(authorizeRoles("SUPER_ADMIN"));
+platformRoleRouter.use(requirePlatformContext);
 
 platformRoleRouter.get(
   "/",

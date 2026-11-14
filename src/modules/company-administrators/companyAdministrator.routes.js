@@ -1,10 +1,8 @@
 import { Router } from "express";
 
 import { authenticate } from "../../middlewares/authenticate.middleware.js";
-import {
-  authorize,
-  authorizeRoles,
-} from "../../middlewares/authorize.middleware.js";
+import { authorize } from "../../middlewares/authorize.middleware.js";
+import { requirePlatformContext } from "../../middlewares/requirePlatformContext.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
 
 import {
@@ -32,6 +30,7 @@ const router = Router({
  * requires authentication.
  */
 router.use(authenticate);
+router.use(requirePlatformContext);
 
 /**
  * Get the current Company Administrator.
@@ -40,7 +39,6 @@ router.use(authenticate);
  */
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN"),
   authorize("admin.read"),
   validate(companyAdministratorCompanyIdSchema),
   getCompanyAdministrator,
@@ -53,7 +51,6 @@ router.get(
  */
 router.post(
   "/",
-  authorizeRoles("SUPER_ADMIN"),
   authorize("admin.create"),
   validate(createCompanyAdministratorSchema),
   createCompanyAdministrator,
@@ -66,7 +63,6 @@ router.post(
  */
 router.patch(
   "/",
-  authorizeRoles("SUPER_ADMIN"),
   authorize("admin.update"),
   validate(updateCompanyAdministratorSchema),
   updateCompanyAdministrator,
@@ -79,7 +75,6 @@ router.patch(
  */
 router.patch(
   "/reset-password",
-  authorizeRoles("SUPER_ADMIN"),
   authorize("admin.update"),
   validate(resetCompanyAdministratorPasswordSchema),
   resetCompanyAdministratorPassword,
@@ -92,7 +87,6 @@ router.patch(
  */
 router.patch(
   "/status",
-  authorizeRoles("SUPER_ADMIN"),
   authorize("admin.deactivate"),
   validate(updateCompanyAdministratorStatusSchema),
   updateCompanyAdministratorStatus,

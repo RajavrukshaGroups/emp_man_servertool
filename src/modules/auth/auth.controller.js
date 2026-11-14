@@ -18,6 +18,8 @@ import {
   resetUserPassword as resetUserPasswordService,
 } from "./auth.service.js";
 
+import { acceptUserInvitation } from "./userInvitation.service.js";
+
 const getRequestIp = (req) => {
   return req.ip || req.socket?.remoteAddress || "";
 };
@@ -221,4 +223,30 @@ export const resetPassword = asyncHandler(async (req, res) => {
         "Password reset successfully. Please log in with your new password.",
       ),
     );
+});
+
+/**
+ * Accept an employee login invitation.
+ *
+ * Public endpoint; authentication is not required.
+ * The invitation token is validated by the service.
+ */
+export const acceptInvitation = asyncHandler(async (req, res) => {
+  const { token, newPassword } = req.validated.body;
+
+  const result = await acceptUserInvitation({
+    token,
+    newPassword,
+    ipAddress: getRequestIp(req),
+  });
+
+  // Remove any existing refresh-token cookie.
+  res.clearCookie(
+    REFRESH_TOKEN_COOKIE_NAME,
+    getClearRefreshTokenCookieOptions(),
+  );
+
+  res.set("Cache-Control", "no-store");
+
+  return res.status(200).json(new ApiResponse(200, null, result.message));
 });

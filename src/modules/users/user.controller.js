@@ -13,6 +13,8 @@ import {
   updateUserStatus as updateUserStatusService,
 } from "./user.service.js";
 
+import { sendUserInvitation } from "../auth/userInvitation.service.js";
+
 const getRequestContext = (req) => ({
   actorId: req.user?.userId ?? null,
   companyId: req.user?.companyId ?? null,
@@ -20,6 +22,7 @@ const getRequestContext = (req) => ({
   departmentId: req.user?.companyAccess?.departmentId ?? null,
   teamId: req.user?.companyAccess?.teamId ?? null,
   roleScopeType: req.user?.roleScopeType ?? null,
+  permissionCodes: req.user?.permissionCodes ?? [],
 });
 
 /**
@@ -158,4 +161,32 @@ export const deleteUser = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, null, "User deleted successfully."));
+});
+
+/**
+ * Send a secure login invitation to an employee.
+ *
+ * Authorization is enforced by the Users route.
+ * Company and employee eligibility are checked by the service.
+ */
+export const sendLoginInvitation = asyncHandler(async (req, res) => {
+  const { userId } = req.validated.params;
+
+  const context = getRequestContext(req);
+
+  const result = await sendUserInvitation({
+    userId,
+    context,
+    ipAddress: req.ip,
+  });
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        result,
+        "Employee login invitation sent successfully.",
+      ),
+    );
 });
