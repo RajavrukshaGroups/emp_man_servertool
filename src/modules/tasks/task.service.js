@@ -1,5 +1,5 @@
 import Task from "./task.model.js";
-import TaskActivity from "./taskactivity.model.js";
+import TaskActivity from "./taskActivity.model.js";
 
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Team from "../teams/team.model.js";
