@@ -1,7 +1,91 @@
-import Company from "../companies/company.model.js";
+﻿import Company from "../companies/company.model.js";
 import Permission from "../permissions/permission.model.js";
 import { ApiError } from "../../utils/ApiError.js";
 import Role from "./role.model.js";
+
+import { PERMISSIONS } from "../../constants/permissions.constants.js";
+
+import {
+  getPermissionApplicability,
+  PERMISSION_APPLICABILITY,
+} from "../../constants/permissionApplicability.constants.js";
+
+/**
+ * Prevent users from modifying their own assigned role.
+ * Applies to both system and custom roles.
+ */
+const ensureNotOwnRole = (roleId, actorRoleId) => {
+  if (!actorRoleId) {
+    throw new ApiError(403, "Authenticated role context is required.");
+  }
+
+  if (roleId.toString() === actorRoleId.toString()) {
+    throw new ApiError(403, "You cannot modify your own assigned role.");
+  }
+};
+
+/**
+ * Allow a narrowly scoped exception for an administrator
+ * managing permissions of their own protected company role.
+ *
+ * Never use an actor-supplied role name as authorization.
+ */
+const canManageOwnProtectedCompanyAdminPermissions = (
+  role,
+  actorRoleId,
+  actorContext,
+) => {
+  if (!role || !actorRoleId) {
+    return false;
+  }
+
+  const actorPermissions = new Set(actorContext?.permissionCodes ?? []);
+
+  return (
+    role._id.toString() === actorRoleId.toString() &&
+    role.code === "COMPANY_ADMIN" &&
+    role.isSystemRole === true &&
+    role.scopeType === "COMPANY" &&
+    actorContext?.roleScopeType === "COMPANY" &&
+    actorPermissions.has(PERMISSIONS.ROLE_UPDATE) &&
+    actorPermissions.has(PERMISSIONS.ROLE_PERMISSION_DELEGATE)
+  );
+};
+
+/**
+ * Permissions that must remain assigned to the protected
+ * Company Administrator role to prevent administrative lockout.
+ */
+const REQUIRED_COMPANY_ADMIN_PERMISSION_CODES = Object.freeze([
+  PERMISSIONS.ROLE_READ,
+  PERMISSIONS.ROLE_UPDATE,
+  PERMISSIONS.ROLE_PERMISSION_DELEGATE,
+  PERMISSIONS.PERMISSION_READ,
+]);
+
+const ensureCompanyAdminPermissionsRetained = async (permissionIds) => {
+  const permissions = await Permission.find({
+    _id: { $in: permissionIds },
+    status: "ACTIVE",
+  })
+    .select("code")
+    .lean();
+
+  const selectedCodes = new Set(
+    permissions.map((permission) => permission.code),
+  );
+
+  const missingRequiredCodes = REQUIRED_COMPANY_ADMIN_PERMISSION_CODES.filter(
+    (code) => !selectedCodes.has(code),
+  );
+
+  if (missingRequiredCodes.length > 0) {
+    throw new ApiError(
+      403,
+      `Required Company Administrator permissions cannot be removed: ${missingRequiredCodes.join(", ")}.`,
+    );
+  }
+};
 
 /**
  * Check whether the company exists and is available.
@@ -68,6 +152,109 @@ const validatePermissionIds = async (permissionIds = []) => {
 };
 
 /**
+ * Prevent platform-only permissions from being assigned
+ * to company-bound roles.
+ *
+ * Delegation authority must never bypass this restriction.
+ */
+const ensureCompanyPermissionApplicability = async (permissionIds = []) => {
+  if (permissionIds.length === 0) {
+    return;
+  }
+
+  const permissions = await Permission.find({
+    _id: { $in: permissionIds },
+    status: "ACTIVE",
+  })
+    .select("code applicability")
+    .lean();
+
+  const invalidPermissions = permissions
+    .filter(
+      (permission) =>
+        getPermissionApplicability(permission.code) ===
+          PERMISSION_APPLICABILITY.GLOBAL ||
+        permission.applicability === PERMISSION_APPLICABILITY.GLOBAL,
+    )
+    .map((permission) => permission.code);
+
+  if (invalidPermissions.length > 0) {
+    throw new ApiError(
+      403,
+      `Platform-only permissions cannot be assigned to company roles: ${invalidPermissions.join(", ")}.`,
+    );
+  }
+};
+
+/**
+ * Ensure the authenticated actor can grant the requested permissions.
+ *
+ * Regular role managers may grant only permissions they possess.
+ * Explicit delegation authority permits broader grants.
+ *
+ * Role scope is validated separately.
+ */
+const ensurePermissionsCanBeGranted = async (permissionIds, actorContext) => {
+  if (!actorContext?.roleScopeType) {
+    throw new ApiError(403, "Authenticated role scope is required.");
+  }
+
+  if (!Array.isArray(actorContext.permissionCodes)) {
+    throw new ApiError(403, "Authenticated permissions are required.");
+  }
+
+  const actorPermissions = new Set(actorContext.permissionCodes);
+
+  if (actorPermissions.has(PERMISSIONS.ROLE_PERMISSION_DELEGATE)) {
+    return;
+  }
+
+  if (permissionIds.length === 0) {
+    return;
+  }
+
+  const permissions = await Permission.find({
+    _id: { $in: permissionIds },
+    status: "ACTIVE",
+  })
+    .select("code")
+    .lean();
+
+  const unauthorizedPermissions = permissions
+    .filter((permission) => !actorPermissions.has(permission.code))
+    .map((permission) => permission.code);
+
+  if (unauthorizedPermissions.length > 0) {
+    throw new ApiError(
+      403,
+      `You cannot grant permissions you do not possess: ${unauthorizedPermissions.join(", ")}.`,
+    );
+  }
+};
+
+/**
+ * Prevent actors from managing roles broader than their own scope.
+ * Delegation permission does not override scope restrictions.
+ */
+const ensureRoleScopeCanBeManaged = (targetScopeType, actorContext) => {
+  const scopeLevels = {
+    TEAM: 1,
+    DEPARTMENT: 2,
+    COMPANY: 3,
+  };
+
+  const actorLevel = scopeLevels[actorContext?.roleScopeType];
+  const targetLevel = scopeLevels[targetScopeType];
+
+  if (!actorLevel || !targetLevel || targetLevel > actorLevel) {
+    throw new ApiError(
+      403,
+      "You cannot manage a role outside your authorized scope.",
+    );
+  }
+};
+
+/**
  * Ensure role code is unique within its applicable scope.
  */
 const ensureRoleCodeIsUnique = async ({
@@ -114,12 +301,19 @@ const ensureRoleCodeIsUnique = async ({
  * DEPARTMENT
  * TEAM
  */
-export const createRole = async (companyId, roleData, actorId = null) => {
+export const createRole = async (
+  companyId,
+  roleData,
+  actorId = null,
+  actorContext = null,
+) => {
   await ensureCompanyExists(companyId);
 
   const normalizedCode = roleData.code.toUpperCase();
 
   const scopeType = roleData.scopeType ?? "COMPANY";
+
+  ensureRoleScopeCanBeManaged(scopeType, actorContext);
 
   await ensureRoleCodeIsUnique({
     companyId,
@@ -128,6 +322,11 @@ export const createRole = async (companyId, roleData, actorId = null) => {
   });
   const permissionIds = await validatePermissionIds(roleData.permissionIds);
 
+  // Company-bound roles must never receive GLOBAL-only permissions.
+  await ensureCompanyPermissionApplicability(permissionIds);
+
+  // Delegation authority is checked separately.
+  await ensurePermissionsCanBeGranted(permissionIds, actorContext);
   const role = await Role.create({
     name: roleData.name,
     code: normalizedCode,
@@ -267,7 +466,10 @@ export const updateRole = async (
   roleId,
   updateData,
   actorId = null,
+  actorRoleId = null,
+  actorContext = null,
 ) => {
+  ensureNotOwnRole(roleId, actorRoleId);
   await ensureCompanyExists(companyId);
 
   const role = await Role.findOne({
@@ -283,6 +485,8 @@ export const updateRole = async (
   if (!role.isEditable) {
     throw new ApiError(403, "This role is protected and cannot be edited.");
   }
+
+  ensureRoleScopeCanBeManaged(role.scopeType, actorContext);
 
   const normalizedUpdateData = {
     ...updateData,
@@ -308,6 +512,7 @@ export const updateRole = async (
   //   );
   // }
 
+  delete normalizedUpdateData.permissionIds;
   delete normalizedUpdateData.companyId;
   delete normalizedUpdateData.scopeType;
   delete normalizedUpdateData.isSystemRole;
@@ -377,9 +582,25 @@ export const updateRolePermissions = async (
   roleId,
   permissionIds,
   actorId = null,
+  actorRoleId = null,
+  actorContext = null,
 ) => {
-  await ensureCompanyExists(companyId);
+  // ensureNotOwnRole(roleId, actorRoleId);
 
+  if (!actorRoleId) {
+    throw new ApiError(403, "Authenticated role context is required.");
+  }
+
+  if (
+    roleId.toString() === actorRoleId.toString() &&
+    !actorContext?.permissionCodes?.includes(
+      PERMISSIONS.ROLE_PERMISSION_DELEGATE,
+    )
+  ) {
+    throw new ApiError(403, "You cannot modify your own assigned role.");
+  }
+
+  await ensureCompanyExists(companyId);
   const role = await Role.findOne({
     _id: roleId,
     companyId,
@@ -390,14 +611,52 @@ export const updateRolePermissions = async (
     throw new ApiError(404, "Role not found.");
   }
 
-  if (!role.isPermissionEditable) {
+  const isOwnRole =
+    actorRoleId && role._id.toString() === actorRoleId.toString();
+
+  const canEditOwnProtectedAdminRole =
+    canManageOwnProtectedCompanyAdminPermissions(
+      role,
+      actorRoleId,
+      actorContext,
+    );
+
+  if (!actorRoleId) {
+    throw new ApiError(403, "Authenticated role context is required.");
+  }
+
+  if (isOwnRole && !canEditOwnProtectedAdminRole) {
+    throw new ApiError(403, "You cannot modify your own assigned role.");
+  }
+
+  if (!role.isPermissionEditable && !canEditOwnProtectedAdminRole) {
     throw new ApiError(
       403,
       "Permissions of this role are protected and cannot be changed.",
     );
   }
 
+  ensureRoleScopeCanBeManaged(role.scopeType, actorContext);
+
   const validatedPermissionIds = await validatePermissionIds(permissionIds);
+
+  // Validate the complete resulting permission set,
+  // not just newly added permissions.
+  await ensureCompanyPermissionApplicability(validatedPermissionIds);
+
+  if (canEditOwnProtectedAdminRole) {
+    await ensureCompanyAdminPermissionsRetained(validatedPermissionIds);
+  }
+
+  const existingPermissionIds = new Set(
+    role.permissionIds.map((id) => id.toString()),
+  );
+
+  const newlyAddedPermissionIds = validatedPermissionIds.filter(
+    (id) => !existingPermissionIds.has(id.toString()),
+  );
+
+  await ensurePermissionsCanBeGranted(newlyAddedPermissionIds, actorContext);
 
   role.permissionIds = validatedPermissionIds;
   role.updatedBy = actorId;
@@ -420,9 +679,12 @@ export const updateRoleStatus = async (
   roleId,
   status,
   actorId = null,
+  actorRoleId = null,
+  actorContext = null,
 ) => {
-  await ensureCompanyExists(companyId);
+  ensureNotOwnRole(roleId, actorRoleId);
 
+  await ensureCompanyExists(companyId);
   const role = await Role.findOne({
     _id: roleId,
     companyId,
@@ -437,6 +699,8 @@ export const updateRoleStatus = async (
     throw new ApiError(403, "This protected role's status cannot be changed.");
   }
 
+  ensureRoleScopeCanBeManaged(role.scopeType, actorContext);
+
   role.status = status;
   role.updatedBy = actorId;
 
@@ -448,9 +712,16 @@ export const updateRoleStatus = async (
 /**
  * Soft-delete a custom role.
  */
-export const softDeleteRole = async (companyId, roleId, actorId = null) => {
-  await ensureCompanyExists(companyId);
+export const softDeleteRole = async (
+  companyId,
+  roleId,
+  actorId = null,
+  actorRoleId = null,
+  actorContext = null,
+) => {
+  ensureNotOwnRole(roleId, actorRoleId);
 
+  await ensureCompanyExists(companyId);
   const role = await Role.findOne({
     _id: roleId,
     companyId,
@@ -464,6 +735,8 @@ export const softDeleteRole = async (companyId, roleId, actorId = null) => {
   if (role.isSystemRole) {
     throw new ApiError(400, "System roles cannot be deleted.");
   }
+
+  ensureRoleScopeCanBeManaged(role.scopeType, actorContext);
 
   role.isDeleted = true;
   role.status = "INACTIVE";

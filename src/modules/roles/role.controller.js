@@ -22,6 +22,11 @@ export const createRole = asyncHandler(async (req, res) => {
     companyId,
     roleData,
     req.user?.userId ?? null,
+    {
+      roleId: req.user?.roleId ?? null,
+      permissionCodes: req.user?.permissionCodes ?? [],
+      roleScopeType: req.user?.roleScopeType ?? null,
+    },
   );
 
   return res
@@ -68,6 +73,11 @@ export const updateRole = asyncHandler(async (req, res) => {
     roleId,
     updateData,
     req.user?.userId ?? null,
+    req.user?.roleId ?? null,
+    {
+      permissionCodes: req.user?.permissionCodes ?? [],
+      roleScopeType: req.user?.roleScopeType ?? null,
+    },
   );
 
   return res
@@ -87,6 +97,11 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
     roleId,
     permissionIds,
     req.user?.userId ?? null,
+    req.user?.roleId ?? null,
+    {
+      permissionCodes: req.user?.permissionCodes ?? [],
+      roleScopeType: req.user?.roleScopeType ?? null,
+    },
   );
 
   return res
@@ -106,6 +121,11 @@ export const updateRoleStatus = asyncHandler(async (req, res) => {
     roleId,
     status,
     req.user?.userId ?? null,
+    req.user?.roleId ?? null,
+    {
+      permissionCodes: req.user?.permissionCodes ?? [],
+      roleScopeType: req.user?.roleScopeType ?? null,
+    },
   );
 
   const message =
@@ -122,8 +142,16 @@ export const updateRoleStatus = asyncHandler(async (req, res) => {
 export const deleteRole = asyncHandler(async (req, res) => {
   const { companyId, roleId } = req.validated.params;
 
-  await softDeleteRoleService(companyId, roleId, req.user?.userId ?? null);
-
+  await softDeleteRoleService(
+    companyId,
+    roleId,
+    req.user?.userId ?? null,
+    req.user?.roleId ?? null,
+    {
+      permissionCodes: req.user?.permissionCodes ?? [],
+      roleScopeType: req.user?.roleScopeType ?? null,
+    },
+  );
   return res
     .status(200)
     .json(new ApiResponse(200, null, "Role deleted successfully."));

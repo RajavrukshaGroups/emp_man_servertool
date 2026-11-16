@@ -9,6 +9,7 @@ import {
 } from "../../middlewares/password-reset-rate-limit.middleware.js";
 
 import {
+  acceptInvitation,
   changePassword,
   forgotPassword,
   getMe,
@@ -20,6 +21,7 @@ import {
 } from "./auth.controller.js";
 
 import {
+  acceptInvitationSchema,
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
@@ -47,6 +49,21 @@ router.post(
   resetPasswordLimiter,
   validate(resetPasswordSchema),
   resetPassword,
+);
+
+/**
+ * Accept an employee login invitation.
+ *
+ * Public endpoint:
+ * Employees do not have a password yet.
+ *
+ * The invitation token is verified by the service.
+ */
+router.post(
+  "/accept-invitation",
+  resetPasswordLimiter,
+  validate(acceptInvitationSchema),
+  acceptInvitation,
 );
 
 router.post("/refresh-token", validate(refreshTokenSchema), refreshToken);

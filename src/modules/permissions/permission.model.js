@@ -42,6 +42,13 @@ const permissionSchema = new mongoose.Schema(
       default: true,
     },
 
+    applicability: {
+      type: String,
+      enum: ["GLOBAL", "COMPANY", "BOTH"],
+      default: undefined,
+      index: true,
+    },
+
     status: {
       type: String,
       enum: ["ACTIVE", "INACTIVE"],

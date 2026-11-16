@@ -66,6 +66,7 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     employeeId,
     payload,
     actorUserId: req.user.userId,
+    actorContext: req.user,
   });
 
   return res
@@ -85,6 +86,7 @@ export const updateEmployeeStatus = asyncHandler(async (req, res) => {
     employeeId,
     status,
     actorUserId: req.user.userId,
+    actorContext: req.user,
   });
 
   return res
@@ -101,6 +103,7 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
     companyId,
     employeeId,
     actorUserId: req.user.userId,
+    actorContext: req.user,
   });
 
   return res

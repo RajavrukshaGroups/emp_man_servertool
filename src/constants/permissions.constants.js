@@ -1,7 +1,9 @@
 export const PERMISSION_MODULES = Object.freeze({
   COMPANY: "company",
   ADMIN: "admin",
+  COMPANY_ACCESS: "company_access",
   EMPLOYEE: "employee",
+  USER: "user",
   ROLE: "role",
   PERMISSION: "permission",
   DEPARTMENT: "department",
@@ -32,16 +34,25 @@ export const PERMISSIONS = Object.freeze({
   ADMIN_READ: "admin.read",
   ADMIN_UPDATE: "admin.update",
   ADMIN_DEACTIVATE: "admin.deactivate",
+  ADMIN_INVITATION_SEND: "admin.invitation_send",
+
+  USER_EMPLOYEE_ACCOUNT_READ: "user.employee_account_read",
+  USER_EMPLOYEE_ACCOUNT_UPDATE: "user.employee_account_update",
+  USER_EMPLOYEE_ACCOUNT_RESET_PASSWORD: "user.employee_account_reset_password",
+  USER_EMPLOYEE_ACCOUNT_STATUS_MANAGE: "user.employee_account_status_manage",
 
   EMPLOYEE_CREATE: "employee.create",
   EMPLOYEE_READ: "employee.read",
   EMPLOYEE_UPDATE: "employee.update",
   EMPLOYEE_DEACTIVATE: "employee.deactivate",
 
+  COMPANY_ACCESS_ROLE_ASSIGN: "company_access.role_assign",
+
   ROLE_CREATE: "role.create",
   ROLE_READ: "role.read",
   ROLE_UPDATE: "role.update",
   ROLE_DELETE: "role.delete",
+  ROLE_PERMISSION_DELEGATE: "role.permission_delegate",
 
   PERMISSION_READ: "permission.read",
 

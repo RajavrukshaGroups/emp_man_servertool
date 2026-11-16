@@ -8,6 +8,15 @@ import User from "../users/user.model.js";
 
 import CompanyAccess from "./companyAccess.model.js";
 import AttendanceLocation from "../attendance/attendanceLocation.model.js";
+import Team from "../teams/team.model.js";
+import Permission from "../permissions/permission.model.js";
+import { PERMISSIONS } from "../../constants/permissions.constants.js";
+import {
+  ensureCompanyAccessRoleAssignmentAllowed,
+  ensureCompanyAccessCreationAllowed,
+  ensureCompanyAccessUpdateAllowed,
+  ensureCompanyAccessSensitiveActionAllowed,
+} from "./companyAccessRoleAuthorization.js";
 /**
  * Common population configuration.
  */
@@ -127,7 +136,7 @@ const ensureRoleBelongsToCompany = async (roleId, companyId) => {
     status: "ACTIVE",
     isDeleted: false,
   })
-    .select("_id name code companyId scopeType status")
+    .select("_id name code companyId scopeType status permissionIds")
     .lean();
 
   if (!role) {
@@ -369,6 +378,7 @@ export const createCompanyAccess = async (
   companyId,
   accessData,
   actorId = null,
+  actorContext = null,
 ) => {
   await Promise.all([
     ensureCompanyExists(companyId),
@@ -394,6 +404,13 @@ export const createCompanyAccess = async (
     departmentId: accessData.departmentId,
     teamId: accessData.teamId,
   });
+  await ensureCompanyAccessCreationAllowed({
+    companyId,
+    accessData,
+    proposedRole: role,
+    actorContext,
+  });
+
   const session = await mongoose.startSession();
 
   try {
@@ -688,8 +705,26 @@ export const updateCompanyAccess = async (
   accessId,
   updateData,
   actorId = null,
+  actorContext = null,
 ) => {
+  if (
+    updateData.roleId !== undefined &&
+    !actorContext?.permissionCodes?.includes(
+      PERMISSIONS.COMPANY_ACCESS_ROLE_ASSIGN,
+    )
+  ) {
+    throw new ApiError(403, "Role assignment permission is required.");
+  }
+
   const access = await findCompanyAccessDocument(companyId, accessId);
+
+  if (Object.keys(updateData).some((field) => field !== "roleId")) {
+    await ensureCompanyAccessUpdateAllowed({
+      companyId,
+      targetAccess: access,
+      actorContext,
+    });
+  }
 
   const nextRole = await ensureRoleBelongsToCompany(
     updateData.roleId !== undefined ? updateData.roleId : access.roleId,
@@ -704,11 +739,33 @@ export const updateCompanyAccess = async (
   const nextTeamId =
     updateData.teamId !== undefined ? updateData.teamId : access.teamId;
 
+  if (Object.keys(updateData).some((field) => field !== "roleId")) {
+    await ensureCompanyAccessUpdateAllowed({
+      companyId,
+      targetAccess: {
+        companyId,
+        departmentId: nextDepartmentId,
+        teamId: nextTeamId,
+      },
+      actorContext,
+    });
+  }
+
   validateRoleScopeAssignment({
     role: nextRole,
     departmentId: nextDepartmentId,
     teamId: nextTeamId,
   });
+  if (updateData.roleId !== undefined) {
+    await ensureCompanyAccessRoleAssignmentAllowed({
+      companyId,
+      targetAccess: access,
+      proposedRole: nextRole,
+      actorContext,
+      nextDepartmentId,
+      nextTeamId,
+    });
+  }
   if (updateData.employeeCode !== undefined) {
     await ensureEmployeeCodeIsUnique(
       companyId,
@@ -786,6 +843,16 @@ export const updateCompanyAccess = async (
         };
       }
 
+      if (updateData.roleId !== undefined) {
+        await ensureCompanyAccessRoleAssignmentAllowed({
+          companyId,
+          targetAccess: access,
+          proposedRole: nextRole,
+          actorContext,
+          nextDepartmentId,
+          nextTeamId,
+        });
+      }
       if (updateData.employeeCode !== undefined) {
         access.employeeCode = normalizeEmployeeCode(updateData.employeeCode);
       }
@@ -813,8 +880,22 @@ export const updateCompanyAccessStatus = async (
   accessId,
   { status, lastWorkingDate = null, reason = "" },
   actorId = null,
+  actorContext = null,
 ) => {
   const access = await findCompanyAccessDocument(companyId, accessId);
+
+  const requiredPermission = ["INACTIVE", "RESIGNED", "TERMINATED"].includes(
+    status,
+  )
+    ? PERMISSIONS.EMPLOYEE_DEACTIVATE
+    : PERMISSIONS.EMPLOYEE_UPDATE;
+
+  await ensureCompanyAccessSensitiveActionAllowed({
+    companyId,
+    targetAccess: access,
+    actorContext,
+    requiredPermission,
+  });
 
   access.status = status;
   access.updatedBy = actorId;
@@ -847,7 +928,16 @@ export const updateCompanyAccessRole = async (
   accessId,
   roleId,
   actorId = null,
+  actorContext = null,
 ) => {
+  if (
+    !actorContext?.permissionCodes?.includes(
+      PERMISSIONS.COMPANY_ACCESS_ROLE_ASSIGN,
+    )
+  ) {
+    throw new ApiError(403, "Role assignment permission is required.");
+  }
+
   const access = await findCompanyAccessDocument(companyId, accessId);
 
   const role = await ensureRoleBelongsToCompany(roleId, companyId);
@@ -858,6 +948,12 @@ export const updateCompanyAccessRole = async (
     teamId: access.teamId,
   });
 
+  await ensureCompanyAccessRoleAssignmentAllowed({
+    companyId,
+    targetAccess: access,
+    proposedRole: role,
+    actorContext,
+  });
   const updatedAccess = await CompanyAccess.findOneAndUpdate(
     {
       _id: accessId,
@@ -889,8 +985,15 @@ export const updateReportingManager = async (
   accessId,
   reportingManagerId,
   actorId = null,
+  actorContext = null,
 ) => {
-  await findCompanyAccessDocument(companyId, accessId);
+  const access = await findCompanyAccessDocument(companyId, accessId);
+
+  await ensureCompanyAccessUpdateAllowed({
+    companyId,
+    targetAccess: access,
+    actorContext,
+  });
 
   await ensureReportingManagerIsValid({
     reportingManagerId,
@@ -928,8 +1031,16 @@ export const softDeleteCompanyAccess = async (
   companyId,
   accessId,
   actorId = null,
+  actorContext = null,
 ) => {
   const access = await findCompanyAccessDocument(companyId, accessId);
+
+  await ensureCompanyAccessSensitiveActionAllowed({
+    companyId,
+    targetAccess: access,
+    actorContext,
+    requiredPermission: PERMISSIONS.EMPLOYEE_DEACTIVATE,
+  });
 
   access.isDeleted = true;
   access.status = "INACTIVE";

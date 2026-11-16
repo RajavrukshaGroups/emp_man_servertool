@@ -111,6 +111,13 @@ const findUserForAuthentication = async (identifier) => {
     );
   }
 
+  if (user.passwordSetupStatus === "INVITATION_PENDING") {
+    throw new ApiError(
+      403,
+      "Your account setup is pending. Please use your email invitation to set your password.",
+    );
+  }
+
   return user;
 };
 
@@ -718,6 +725,13 @@ export const refreshAuthenticationToken = async ({
     throw new ApiError(401, "User account is unavailable.");
   }
 
+  if (user.passwordSetupStatus === "INVITATION_PENDING") {
+    throw new ApiError(
+      403,
+      "Your account setup is pending. Please complete your email invitation before logging in.",
+    );
+  }
+
   /**
    * Reject refresh tokens issued before the latest password change.
    */
@@ -1050,6 +1064,10 @@ export const requestPasswordReset = async ({ email, ipAddress = "" }) => {
     return publicMessage;
   }
 
+  if (user.passwordSetupStatus === "INVITATION_PENDING") {
+    return publicMessage;
+  }
+
   /**
    * Find the user's active company memberships.
    *
@@ -1324,6 +1342,10 @@ export const resetUserPassword = async ({
         .session(session);
 
       if (!user) {
+        throw new ApiError(400, invalidTokenMessage);
+      }
+
+      if (user.passwordSetupStatus === "INVITATION_PENDING") {
         throw new ApiError(400, invalidTokenMessage);
       }
 

@@ -2,14 +2,15 @@ import { ApiError } from "../../utils/ApiError.js";
 import User from "./user.model.js";
 import CompanyAccess from "../company-access/companyAccess.model.js";
 import Team from "../teams/team.model.js";
+import crypto from "node:crypto";
+import Employee from "../employees/employee.model.js";
+
+import { ensureEmployeeAccountActionAllowed } from "./employeeAccountAuthorization.js";
 
 // const isPlatformScope = (context = {}) => context.roleScopeType === "ORG";
 const isPlatformScope = (context = {}) => context.roleScopeType === "GLOBAL";
 
 const ensureCompanyContext = (context = {}) => {
-  console.log("ensureCompanyContext()");
-  console.dir(context, { depth: null });
-
   if (isPlatformScope(context)) {
     return;
   }
@@ -194,7 +195,24 @@ const ensureMobileIsUnique = async (mobile, excludeUserId = null) => {
 export const createUser = async (userData, context = {}) => {
   const { actorId = null, companyId = null } = context;
 
-  const { forEmployeeOnboarding = false, ...userPayload } = userData;
+  const {
+    forEmployeeOnboarding = false,
+    accountSetupMethod = "PASSWORD",
+    ...userPayload
+  } = userData;
+
+  const isInvitationBased = accountSetupMethod === "EMAIL_INVITATION";
+
+  if (isInvitationBased && (!forEmployeeOnboarding || !companyId)) {
+    throw new ApiError(
+      400,
+      "Invitation-based creation requires employee onboarding and company context.",
+    );
+  }
+
+  const accountPassword = isInvitationBased
+    ? `${crypto.randomBytes(48).toString("base64url")}Aa1!`
+    : userPayload.password;
 
   if (forEmployeeOnboarding && !companyId) {
     throw new ApiError(
@@ -221,7 +239,9 @@ export const createUser = async (userData, context = {}) => {
     email: normalizedEmail,
     mobile: normalizedMobile,
 
-    password: userPayload.password,
+    password: accountPassword,
+
+    passwordSetupStatus: isInvitationBased ? "INVITATION_PENDING" : "LEGACY",
 
     profilePhoto: userPayload.profilePhoto ?? "",
 
@@ -247,6 +267,30 @@ export const createUser = async (userData, context = {}) => {
   return User.findById(user._id).select("-password").lean();
 };
 
+const getReadableUserIds = async (context = {}) => {
+  const scopedUserIds = await getScopedCompanyUserIds(context);
+
+  // Existing administrator visibility remains unchanged.
+  if (context.permissionCodes?.includes("admin.read")) {
+    return scopedUserIds;
+  }
+
+  // Restricted employee-account access.
+  if (!context.permissionCodes?.includes("user.employee_account_read")) {
+    throw new ApiError(403, "User account read permission is required.");
+  }
+
+  const employees = await Employee.find({
+    companyId: context.companyId,
+    isDeleted: false,
+    userId: { $in: scopedUserIds },
+  })
+    .select("userId")
+    .lean();
+
+  return employees.map((employee) => employee.userId);
+};
+
 /**
  * List users with pagination, filters, search and sorting.
  */
@@ -264,15 +308,11 @@ export const listUsers = async (
   },
   context = {},
 ) => {
-  const filter = {
-    isDeleted: false,
-  };
+  const filter = { isDeleted: false };
 
   if (!isPlatformScope(context)) {
-    const companyUserIds = await getScopedCompanyUserIds(context);
-
     filter._id = {
-      $in: companyUserIds,
+      $in: await getReadableUserIds(context),
     };
   }
 
@@ -344,6 +384,18 @@ export const listUsers = async (
  */
 export const getUserById = async (userId, context = {}) => {
   await ensureUserWithinScope(userId, context);
+
+  if (!isPlatformScope(context)) {
+    const readableUserIds = await getReadableUserIds(context);
+
+    const canReadUser = readableUserIds.some(
+      (allowedUserId) => String(allowedUserId) === String(userId),
+    );
+
+    if (!canReadUser) {
+      throw new ApiError(404, "User not found.");
+    }
+  }
   const user = await User.findOne({
     _id: userId,
     isDeleted: false,
@@ -366,6 +418,13 @@ export const getUserById = async (userId, context = {}) => {
  */
 export const updateUser = async (userId, updateData, context = {}) => {
   await ensureUserWithinScope(userId, context);
+
+  await ensureEmployeeAccountActionAllowed({
+    targetUserId: userId,
+    context,
+    action: "UPDATE",
+  });
+
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({
@@ -442,6 +501,13 @@ export const updateUser = async (userId, updateData, context = {}) => {
  */
 export const updateUserStatus = async (userId, status, context = {}) => {
   await ensureUserWithinScope(userId, context);
+
+  await ensureEmployeeAccountActionAllowed({
+    targetUserId: userId,
+    context,
+    action: "STATUS_MANAGE",
+  });
+
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({
@@ -509,6 +575,13 @@ export const changePassword = async (
  */
 export const resetPassword = async (userId, newPassword, context = {}) => {
   await ensureUserWithinScope(userId, context);
+
+  await ensureEmployeeAccountActionAllowed({
+    targetUserId: userId,
+    context,
+    action: "RESET_PASSWORD",
+  });
+
   const actorId = context.actorId ?? null;
 
   const user = await User.findOne({

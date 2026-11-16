@@ -48,53 +48,99 @@ const passwordSchema = z
     "Password must contain at least one special character.",
   );
 
-export const createUserSchema = z.object({
-  body: z
-    .object({
-      firstName: nameSchema,
+export const createUserSchema = z
+  .object({
+    body: z
+      .object({
+        firstName: nameSchema,
 
-      middleName: nameSchema.optional().or(z.literal("")),
+        middleName: nameSchema.optional().or(z.literal("")),
 
-      lastName: z.string().trim().max(50).optional().default(""),
+        lastName: z.string().trim().max(50).optional().default(""),
 
-      displayName: optionalText(120),
+        displayName: optionalText(120),
 
-      email: emailSchema,
+        email: emailSchema,
 
-      mobile: mobileSchema.optional().nullable(),
+        mobile: mobileSchema.optional().nullable(),
 
-      password: passwordSchema,
+        password: passwordSchema.optional(),
 
-      forEmployeeOnboarding: z.boolean().optional().default(false),
-      profilePhoto: z
-        .string()
-        .trim()
-        .url("Profile photo must be a valid URL.")
-        .optional()
-        .or(z.literal("")),
+        accountSetupMethod: z
+          .enum(["PASSWORD", "EMAIL_INVITATION"])
+          .optional()
+          .default("PASSWORD"),
 
-      gender: z
-        .enum(["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"])
-        .default("PREFER_NOT_TO_SAY"),
+        forEmployeeOnboarding: z.boolean().optional().default(false),
+        profilePhoto: z
+          .string()
+          .trim()
+          .url("Profile photo must be a valid URL.")
+          .optional()
+          .or(z.literal("")),
 
-      dateOfBirth: z.coerce
-        .date()
-        .max(new Date(), "Date of birth cannot be in the future.")
-        .optional()
-        .nullable(),
+        gender: z
+          .enum(["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"])
+          .default("PREFER_NOT_TO_SAY"),
 
-      status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED"]).default("ACTIVE"),
+        dateOfBirth: z.coerce
+          .date()
+          .max(new Date(), "Date of birth cannot be in the future.")
+          .optional()
+          .nullable(),
 
-      emailVerified: z.boolean().default(false),
+        status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED"]).default("ACTIVE"),
 
-      mobileVerified: z.boolean().default(false),
-    })
-    .strict(),
+        emailVerified: z.boolean().default(false),
 
-  params: z.object({}).strict().optional(),
+        mobileVerified: z.boolean().default(false),
+      })
+      .strict(),
 
-  query: z.object({}).strict().optional(),
-});
+    params: z.object({}).strict().optional(),
+
+    query: z.object({}).strict().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const { accountSetupMethod, password, forEmployeeOnboarding } = data.body;
+
+    if (accountSetupMethod === "PASSWORD" && !password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["body", "password"],
+        message: "Password is required for password-based account creation.",
+      });
+    }
+
+    if (accountSetupMethod === "EMAIL_INVITATION") {
+      if (!forEmployeeOnboarding) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["body", "forEmployeeOnboarding"],
+          message:
+            "Email invitations are only supported for employee onboarding.",
+        });
+      }
+
+      if (password !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["body", "password"],
+          message:
+            "Do not provide a password for invitation-based account creation.",
+        });
+      }
+
+      if (data.body.emailVerified === true) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["body", "emailVerified"],
+          message:
+            "Invitation-based accounts cannot start with a verified email.",
+        });
+      }
+    }
+  });
 
 export const updateUserSchema = z.object({
   body: z
@@ -104,7 +150,7 @@ export const updateUserSchema = z.object({
       middleName: nameSchema.optional().or(z.literal("")),
 
       lastName: z.string().trim().max(50).optional(),
-      
+
       displayName: optionalText(120),
 
       email: emailSchema.optional(),

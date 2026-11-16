@@ -113,6 +113,17 @@ const authenticateCompanyContext = async ({ payload, user }) => {
     throw new ApiError(403, "Assigned role is unavailable or inactive.");
   }
 
+  if (
+    !companyAccess.roleId.companyId ||
+    companyAccess.roleId.companyId.toString() !==
+      companyAccess.companyId._id.toString()
+  ) {
+    throw new ApiError(
+      403,
+      "Assigned role does not belong to the authenticated company.",
+    );
+  }
+
   const companyBoundRoleScopes = ["COMPANY", "DEPARTMENT", "TEAM"];
 
   if (!companyBoundRoleScopes.includes(companyAccess.roleId.scopeType)) {
@@ -278,12 +289,19 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
     isDeleted: false,
   })
     .select(
-      "_id firstName lastName displayName email mobile status passwordChangedAt",
+      "_id firstName lastName displayName email mobile status passwordChangedAt passwordSetupStatus",
     )
     .lean();
 
   if (!user) {
     throw new ApiError(401, "User account is unavailable.");
+  }
+
+  if (user.passwordSetupStatus === "INVITATION_PENDING") {
+    throw new ApiError(
+      403,
+      "Your account setup is pending. Please complete your email invitation before accessing HRMS.",
+    );
   }
 
   /**

@@ -7,6 +7,8 @@ import Team from "../teams/team.model.js";
 import User from "../users/user.model.js";
 import Employee from "./employee.model.js";
 import { ApiError } from "../../utils/ApiError.js";
+import { ensureCompanyAccessSensitiveActionAllowed } from "../company-access/companyAccessRoleAuthorization.js";
+import { PERMISSIONS } from "../../constants/permissions.constants.js";
 
 const { Types } = mongoose;
 
@@ -907,6 +909,7 @@ export const updateEmployee = async ({
   employeeId,
   payload,
   actorUserId,
+  actorContext,
 }) => {
   await ensureCompanyExists(companyId);
 
@@ -914,6 +917,27 @@ export const updateEmployee = async ({
     companyId,
     employeeId,
     populate: false,
+  });
+
+  const targetAccess = await CompanyAccess.findOne({
+    _id: employee.companyAccessId,
+    companyId,
+    userId: employee.userId,
+    isDeleted: false,
+  }).lean();
+
+  if (!targetAccess) {
+    throw new ApiError(
+      403,
+      "Employee company access is unavailable for authorization.",
+    );
+  }
+
+  await ensureCompanyAccessSensitiveActionAllowed({
+    companyId,
+    targetAccess,
+    actorContext,
+    requiredPermission: PERMISSIONS.EMPLOYEE_UPDATE,
   });
 
   if (payload.statutoryDetails) {
@@ -938,6 +962,7 @@ export const updateEmployeeStatus = async ({
   employeeId,
   status,
   actorUserId,
+  actorContext,
 }) => {
   await ensureCompanyExists(companyId);
 
@@ -945,6 +970,27 @@ export const updateEmployeeStatus = async ({
     companyId,
     employeeId,
     populate: false,
+  });
+
+  const targetAccess = await CompanyAccess.findOne({
+    _id: employee.companyAccessId,
+    companyId,
+    userId: employee.userId,
+    isDeleted: false,
+  }).lean();
+
+  if (!targetAccess) {
+    throw new ApiError(
+      403,
+      "Employee company access is unavailable for authorization.",
+    );
+  }
+
+  await ensureCompanyAccessSensitiveActionAllowed({
+    companyId,
+    targetAccess,
+    actorContext,
+    requiredPermission: PERMISSIONS.EMPLOYEE_UPDATE,
   });
 
   if (employee.status === status) {
@@ -963,6 +1009,7 @@ export const deleteEmployee = async ({
   companyId,
   employeeId,
   actorUserId,
+  actorContext,
 }) => {
   await ensureCompanyExists(companyId);
 
@@ -970,6 +1017,27 @@ export const deleteEmployee = async ({
     companyId,
     employeeId,
     populate: false,
+  });
+
+  const targetAccess = await CompanyAccess.findOne({
+    _id: employee.companyAccessId,
+    companyId,
+    userId: employee.userId,
+    isDeleted: false,
+  }).lean();
+
+  if (!targetAccess) {
+    throw new ApiError(
+      403,
+      "Employee company access is unavailable for authorization.",
+    );
+  }
+
+  await ensureCompanyAccessSensitiveActionAllowed({
+    companyId,
+    targetAccess,
+    actorContext,
+    requiredPermission: PERMISSIONS.EMPLOYEE_DEACTIVATE,
   });
 
   employee.isDeleted = true;

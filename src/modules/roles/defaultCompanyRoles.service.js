@@ -18,6 +18,7 @@ const DEFAULT_COMPANY_ROLES = [
       "admin.read",
       "admin.update",
       "admin.deactivate",
+      "admin.invitation_send",
 
       "employee.create",
       "employee.read",
@@ -28,6 +29,13 @@ const DEFAULT_COMPANY_ROLES = [
       "role.read",
       "role.update",
       "role.delete",
+      "role.permission_delegate",
+      "company_access.role_assign",
+      "user.employee_account_read",
+      "user.employee_account_update",
+      "user.employee_account_reset_password",
+      "user.employee_account_status_manage",
+      "leave.apply",
 
       "permission.read",
 
@@ -302,20 +310,17 @@ export const provisionDefaultCompanyRoles = async ({
           name: roleDefinition.name,
           code: roleDefinition.code,
           description: roleDefinition.description,
-          permissionIds,
           scopeType: roleDefinition.scopeType,
 
           isSystemRole: true,
-
           isEditable: false,
-
           isPermissionEditable: roleDefinition.isPermissionEditable ?? false,
-
           status: "ACTIVE",
 
           updatedBy: actorId,
         },
         $setOnInsert: {
+          permissionIds,
           createdBy: actorId,
         },
       },

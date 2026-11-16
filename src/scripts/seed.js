@@ -1,6 +1,7 @@
 import { connectDatabase, disconnectDatabase } from "../config/database.js";
 
 import { PERMISSION_LIST } from "../constants/permissions.constants.js";
+import { getPermissionApplicability } from "../constants/permissionApplicability.constants.js";
 
 import Company from "../modules/companies/company.model.js";
 import Permission from "../modules/permissions/permission.model.js";
@@ -62,6 +63,8 @@ const seedPermissions = async () => {
             )} access for ${module}.`,
 
             isSystem: true,
+
+            applicability: getPermissionApplicability(code),
 
             status: "ACTIVE",
           },

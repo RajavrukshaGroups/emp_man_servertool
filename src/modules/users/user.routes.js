@@ -1,7 +1,10 @@
 import { Router } from "express";
 
 import { authenticate } from "../../middlewares/authenticate.middleware.js";
-import { authorize } from "../../middlewares/authorize.middleware.js";
+import {
+  authorize,
+  authorizeAny,
+} from "../../middlewares/authorize.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
 
 import {
@@ -11,6 +14,7 @@ import {
   getUserById,
   listUsers,
   resetPassword,
+  sendLoginInvitation,
   updateUser,
   updateUserStatus,
 } from "./user.controller.js";
@@ -48,6 +52,16 @@ router.use(authenticate);
 const authorizeUserCreation = (req, res, next) => {
   const isEmployeeOnboarding = req.body?.forEmployeeOnboarding === true;
 
+  const isInvitationBased = req.body?.accountSetupMethod === "EMAIL_INVITATION";
+
+  if (isInvitationBased) {
+    return authorize("employee.create", "admin.invitation_send")(
+      req,
+      res,
+      next,
+    );
+  }
+
   if (isEmployeeOnboarding) {
     return authorize("employee.create")(req, res, next);
   }
@@ -63,24 +77,47 @@ router.post("/", authorizeUserCreation, validate(createUserSchema), createUser);
 /**
  * List users.
  */
-router.get("/", authorize("admin.read"), validate(listUsersSchema), listUsers);
-
+router.get(
+  "/",
+  authorizeAny("admin.read", "user.employee_account_read"),
+  validate(listUsersSchema),
+  listUsers,
+);
 /**
  * Get one user.
  */
 router.get(
   "/:userId",
-  authorize("admin.read"),
+  authorizeAny("admin.read", "user.employee_account_read"),
   validate(userIdParamSchema),
   getUserById,
 );
 
 /**
+ * Send employee login invitation.
+ *
+ * Only authenticated users with admin.invitation_send
+ * permission can trigger this action.
+ *
+ * The invitation service additionally validates
+ * company ownership and employee eligibility.
+ */
+router.post(
+  "/:userId/send-invitation",
+  authorize("admin.invitation_send"),
+  validate(userIdParamSchema),
+  sendLoginInvitation,
+);
+
+/**
+ * Update user.
+ */
+/**
  * Update user.
  */
 router.patch(
   "/:userId",
-  authorize("admin.update"),
+  authorizeAny("admin.update", "user.employee_account_update"),
   validate(updateUserSchema),
   updateUser,
 );
@@ -90,7 +127,7 @@ router.patch(
  */
 router.patch(
   "/:userId/status",
-  authorize("admin.deactivate"),
+  authorizeAny("admin.deactivate", "user.employee_account_status_manage"),
   validate(updateUserStatusSchema),
   updateUserStatus,
 );
@@ -112,7 +149,7 @@ router.patch(
  */
 router.patch(
   "/:userId/reset-password",
-  authorize("admin.update"),
+  authorizeAny("admin.update", "user.employee_account_reset_password"),
   validate(resetPasswordSchema),
   resetPassword,
 );
