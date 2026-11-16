@@ -14,7 +14,7 @@ const startServer = async () => {
   try {
     await connectDatabase();
 
-    server.listen(env.PORT, () => {
+    server.listen(env.PORT, env.IS_PRODUCTION ? "127.0.0.1" : undefined, () => {
       console.log(`Server running in ${env.NODE_ENV} mode on port ${env.PORT}`);
 
       console.log(`Health check: http://localhost:${env.PORT}/api/v1/health`);
